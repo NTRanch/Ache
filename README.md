@@ -19,6 +19,9 @@ gates below are passed.
   per-plugin capability matrix and the sub-pages still to read.
 - [TOYS.md](TOYS.md): the current Lovense developer-program toy
   catalog (24 devices with product pages).
+- [EXAMPLES.md](EXAMPLES.md): three Lovense games read as design
+  references (Projekt Melody, Iced Coffee with Breastmilk,
+  CumPartment), with what STROBE takes from each.
 
 ## The Lovense surfaces, and which ones are ours
 
