@@ -17,6 +17,8 @@ gates below are passed.
 - [DOCS-NOTES.md](DOCS-NOTES.md): condensed notes from the official
   Lovense developer documentation (read 2026-10-20), including the
   per-plugin capability matrix and the sub-pages still to read.
+- [TOYS.md](TOYS.md): the current Lovense developer-program toy
+  catalog (24 devices with product pages).
 
 ## The Lovense surfaces, and which ones are ours
 
