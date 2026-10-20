@@ -12,6 +12,8 @@ gates below are passed.
 
 - [CHECKLIST.md](CHECKLIST.md): the phased work list, account and
   console setup first, code last.
+- [TESTING.md](TESTING.md): the test ladder for the integration,
+  mock first, live hardware last and gated.
 - [DOCS-NOTES.md](DOCS-NOTES.md): condensed notes from the official
   Lovense developer documentation (read 2026-10-20), including the
   per-plugin capability matrix and the sub-pages still to read.
