@@ -6,6 +6,9 @@
 
 mod config;
 mod error;
+#[cfg(test)]
+mod test_stub;
+mod transport;
 
 use std::process::ExitCode;
 
