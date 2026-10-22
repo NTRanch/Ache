@@ -118,10 +118,19 @@ the community servers carry no safety contract and no lane
 discipline, and the cloud-route one uses the token route already
 rejected for STROBE in Phase 2's surface notes.
 
-- [ ] S0: brief accepted (MCP-BRIEF.md) and this phase recorded.
-- [ ] S1: read core — fail-closed config, status, toy discovery
+- [x] S0: brief accepted (MCP-BRIEF.md) and this phase recorded.
+      (2026-10-21, pushed at 7b2a697.)
+- [x] S1: read core — fail-closed config, status, toy discovery
       over the mock transport and the real transport unarmed.
       No output path exists at this stage.
+      (Gate PASS 2026-10-21: branch pax/lovense-mcp-s1, commits
+      c652da7..4a97d69; fmt clean, clippy -D warnings clean,
+      cargo test 45 passed / 0 failed (20 validation /
+      25 adversarial), nix build green, stdio smoke verified by
+      the reviewer: exactly lovense_status + lovense_toys, mock
+      labeled as mock, real transport with empty host returns
+      target_unconfigured with no network call, and the only
+      wire command in the source is GetToys.)
 - [ ] S2: output core — arm/disarm, function, pattern, preset,
       stop, behind a pure decide() gate (master defaults off,
       ceiling clamped in code, deny final). Adversarial battery
@@ -139,6 +148,14 @@ rejected for STROBE in Phase 2's surface notes.
 - [ ] Standing exclusions: no cloud/server API route, no App
       Gallery platform API (that is Phase 4), no Buttplug
       transport, no presence in the Qompass registry or site.
+- Parked candidate (Owner ruling, 2026-10-21): the buttplug
+  crate family (direct BLE, Lovense Connect relay, USB dongle)
+  is a Phase 2/3 surface candidate, to be evaluated in one pass
+  alongside the Unity plugins when Phase 2 opens; its
+  device-configuration database is mined as reference data in
+  that evaluation. Safety delta to weigh there: on direct BLE
+  there is no Remote-app backstop, so this server's decide()
+  gate and watchdog would be the only enforcement.
 
 ## Standing rules
 
