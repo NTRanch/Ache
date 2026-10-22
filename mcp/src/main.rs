@@ -6,6 +6,7 @@
 
 mod config;
 mod error;
+mod server;
 #[cfg(test)]
 mod test_stub;
 mod transport;
@@ -13,9 +14,12 @@ mod transport;
 use std::process::ExitCode;
 
 use config::{CONFIG_ENV, Config};
+use server::Server;
 
 /// Exit status for a refused configuration.
 const EXIT_CONFIG_INVALID: u8 = 2;
+/// Exit status when stdio itself fails.
+const EXIT_IO_FAILED: u8 = 1;
 
 fn main() -> ExitCode {
     // Fail closed: refuse to serve under a config that does not validate.
@@ -29,6 +33,18 @@ fn main() -> ExitCode {
             }
         },
     };
-    eprintln!("lovense-mcp: transport {}", config.transport.as_str());
-    ExitCode::SUCCESS
+    eprintln!(
+        "lovense-mcp {}: transport {}, S1 read core (no output path)",
+        server::SERVER_VERSION,
+        config.transport.as_str()
+    );
+    let transport = transport::from_config(&config);
+    let server = Server::new(config, transport);
+    match server::serve(&server, std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("lovense-mcp: stdio failed: {error}");
+            ExitCode::from(EXIT_IO_FAILED)
+        }
+    }
 }

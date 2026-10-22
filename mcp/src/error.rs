@@ -85,7 +85,8 @@ pub fn err<T>(code: ErrorCode, message: impl Into<String>) -> Result<T> {
     Err(LovenseError::new(code, message))
 }
 
-fn truncate(mut message: String) -> String {
+/// Bound a message to `ERROR_MESSAGE_BYTES_MAX` bytes on a char boundary.
+pub fn truncate(mut message: String) -> String {
     if message.len() <= ERROR_MESSAGE_BYTES_MAX {
         return message;
     }
