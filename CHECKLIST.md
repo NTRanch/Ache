@@ -107,7 +107,45 @@ review work.
       wired to the media element, `PatternSyncError` and
       `appDisconnected` handled visibly for the viewer.
 
+## Phase 6 — MCP server (commissioned 2026-10-21)
+
+An MCP control surface over the Standard API local Game Mode
+route, so MCP clients (agents, phlow, the editor stack) can link
+into the studio's games and apps under the same safety contract
+as the in-game bridge. Full brief: `MCP-BRIEF.md` in this repo.
+Lovense publishes no official MCP server (verified 2026-10-21);
+the community servers carry no safety contract and no lane
+discipline, and the cloud-route one uses the token route already
+rejected for STROBE in Phase 2's surface notes.
+
+- [ ] S0: brief accepted (MCP-BRIEF.md) and this phase recorded.
+- [ ] S1: read core — fail-closed config, status, toy discovery
+      over the mock transport and the real transport unarmed.
+      No output path exists at this stage.
+- [ ] S2: output core — arm/disarm, function, pattern, preset,
+      stop, behind a pure decide() gate (master defaults off,
+      ceiling clamped in code, deny final). Adversarial battery
+      green: over-ceiling strengths, 51-strength patterns,
+      sub-floor intervals, output while disarmed or targetless,
+      malformed rules, stop mid-pattern.
+- [ ] S3: hardening — heartbeat watchdog zeroes output on
+      silence, session-drop path zeroes output with cleanup
+      logged, conformance pass against Inspector, rose, phlow.
+- [ ] S4: live rung — real hardware, lowest level, stop latency
+      measured. Only on an explicit go from the studio, with
+      the account holder present at the machine. (This is the
+      server's acceptance; it absorbs the previously tabled
+      live test rung.)
+- [ ] Standing exclusions: no cloud/server API route, no App
+      Gallery platform API (that is Phase 4), no Buttplug
+      transport, no presence in the Qompass registry or site.
+
 ## Standing rules
+
+- Tracking lanes (Owner, 2026-10-21): SFW tracking (the idea
+  register, the progress board) lives in the qompassai repos;
+  NSFW build tracking lives here in the NTRanch repos. This
+  checklist is the canonical tracker for the work in this repo.
 
 - Credentials are referenced by password-store path only, in every
   repo, issue, and document. No exceptions.
