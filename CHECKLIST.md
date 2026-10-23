@@ -113,10 +113,12 @@ An MCP control surface over the Standard API local Game Mode
 route, so MCP clients (agents, phlow, the editor stack) can link
 into the studio's games and apps under the same safety contract
 as the in-game bridge. Full brief: `MCP-BRIEF.md` in this repo.
-Lovense publishes no official MCP server (verified 2026-10-21);
-the community servers carry no safety contract and no lane
-discipline, and the cloud-route one uses the token route already
-rejected for STROBE in Phase 2's surface notes.
+Lovense publishes an official MCP (RemoteMCP.zip, verified 2026-10-21;
+premise corrected on main at c033872): exactly 2 tools — SendFunctions
+(hardcodes Vibrate:10 for 2 s to all toys) and SendStopFunction() —
+with no safety contract. Our rationale is the safety-contract
+differentiation. The cloud-route community server uses the token route
+already rejected for STROBE in Phase 2's surface notes.
 
 - [x] S0: brief accepted (MCP-BRIEF.md) and this phase recorded.
       (2026-10-21, pushed at 7b2a697.)
@@ -146,9 +148,10 @@ rejected for STROBE in Phase 2's surface notes.
       server's acceptance; it absorbs the previously tabled
       live test rung.)
 - [ ] Standing exclusions: no cloud/server API route, no App
-      Gallery platform API (that is Phase 4), no Buttplug
-      transport, no presence in the Qompass registry or site.
-- Parked candidate (Owner ruling, 2026-10-21): the buttplug
+      Gallery platform API (that is Phase 4), no presence in the
+      Qompass registry or site. (Buttplug transport moved to
+      Phase 7 P-A, 2026-10-22.)
+- UN-PARKED (Owner direction, 2026-10-22 — see Phase 7): the buttplug
   crate family (direct BLE, Lovense Connect relay, USB dongle)
   is a Phase 2/3 surface candidate, to be evaluated in one pass
   alongside the Unity plugins when Phase 2 opens; its
@@ -156,6 +159,36 @@ rejected for STROBE in Phase 2's surface notes.
   that evaluation. Safety delta to weigh there: on direct BLE
   there is no Remote-app backstop, so this server's decide()
   gate and watchdog would be the only enforcement.
+
+## Phase 7 — Device platform expansion (Owner direction, 2026-10-22)
+
+One gate, many transports. The MCP's decide() gate + safety contract become
+transport-independent; the safety contract does not dilute per transport.
+Sequencing: Lovense S2 → S3 → S4 stays the critical path; then P-C, then
+P-A, then P-B. P-D is last resort only. Never in the ai.qompass registry,
+never on qompass.ai, never routed to Azoth. We hold no credentials on any
+transport. Survey brief: `~/workspace/lovense-mcp-20261021/PLATFORM-EXPANSION.md`
+(sandbox; copy into this repo when Phase 7 opens).
+
+- [ ] P-C: funscript emission (content side) — Strobe + slate titles export
+      `.funscript` timelines. Survey TCode/OSR from primary sources first
+      (marked UNVERIFIED in the 2026-10-22 survey).
+- [ ] P-A: T-BUTTPLUG — our MCP as a buttplug **client** to a user-run
+      Intiface Central (WebSocket). Unreachable Intiface = transport
+      unavailable, fail-closed. (This un-parks the 2026-10-21 candidate;
+      the device-configuration database is mined as reference data here.)
+- [ ] P-B: T-HANDY — OhDoki API (connection-key), direct control + funscript
+      playback behind the same arm/stop contract.
+- [ ] P-D: direct BLE via btleplug — last resort only, only if P-A/P-B
+      prove insufficient. Safety delta: no Remote-app backstop on direct
+      BLE, so this server's decide() gate and watchdog are the only
+      enforcement.
+- [ ] Platform map filed 2026-10-22 (slate): Lovense direct = Strobe flagship
+      + Fitting Room + Pendulum; Buttplug/Intiface = Offstream + Dress Code
+      partner mode; Handy/OhDoki = Dear Husband + Mantra; funscript/TCode
+      export = Onsen Nights + Pen Pal; Kiiroo via Buttplug = Afterglow Radio
+      + Dress Code pairing. No transport is built ahead of a title that
+      carries it.
 
 ## Standing rules
 
