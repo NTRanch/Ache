@@ -18,6 +18,8 @@ pub enum ErrorCode {
     TargetUnreachable,
     ResponseInvalid,
     AppError,
+    NotArmed,
+    RequestInvalid,
 }
 
 impl ErrorCode {
@@ -30,6 +32,8 @@ impl ErrorCode {
             ErrorCode::TargetUnreachable => "target_unreachable",
             ErrorCode::ResponseInvalid => "response_invalid",
             ErrorCode::AppError => "app_error",
+            ErrorCode::NotArmed => "not_armed",
+            ErrorCode::RequestInvalid => "request_invalid",
         }
     }
 
@@ -42,6 +46,8 @@ impl ErrorCode {
             ErrorCode::TargetUnreachable | ErrorCode::ResponseInvalid | ErrorCode::AppError => {
                 "transport"
             }
+            ErrorCode::NotArmed => "safety",
+            ErrorCode::RequestInvalid => "request",
         }
     }
 }

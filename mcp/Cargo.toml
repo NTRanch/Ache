@@ -1,9 +1,9 @@
 [package]
 name = "lovense-mcp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Lovense MCP stdio server (stage S1: read core — status and toy discovery, no output path)"
+description = "Lovense MCP stdio server (stage S2: read core plus the decide()-gated output core)"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

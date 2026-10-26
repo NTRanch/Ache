@@ -1,6 +1,8 @@
-//! The transport boundary. S1 exposes READ operations only: a status
-//! probe (no I/O) and toy discovery. There is deliberately no output
-//! method on the trait; S2 adds output behind the `decide()` gate.
+//! The transport boundary: a read side (a status probe with no I/O,
+//! and toy discovery) and an output side that sends exactly one thing —
+//! a command body the `decide()` gate constructed and allowed. No
+//! caller assembles wire bodies, and no transport method invents one:
+//! the gate's body is the wire's body.
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -77,9 +79,22 @@ pub trait ReadTransport {
     fn discover(&self) -> Result<Vec<Toy>>;
 }
 
+/// The output transport contract. Implementations send the body they
+/// are given, exactly; reshaping a body here would bypass the gate, so
+/// there is deliberately no other method.
+pub trait OutputTransport {
+    /// Send one gate-constructed command body to `/command`.
+    fn send_command(&self, body: &Value) -> Result<()>;
+}
+
+/// The full transport: read and output over one configured target.
+pub trait Transport: ReadTransport + OutputTransport {}
+
+impl<T: ReadTransport + OutputTransport> Transport for T {}
+
 /// The production transport for a config, or `None` when the config
 /// names the real transport but no host: then nothing can reach the wire.
-pub fn from_config(config: &Config) -> Option<Box<dyn ReadTransport>> {
+pub fn from_config(config: &Config) -> Option<Box<dyn Transport>> {
     match config.transport {
         TransportKind::Mock => Some(Box::new(MockTransport::new())),
         TransportKind::Real => {
@@ -99,12 +114,16 @@ pub enum ReadRequest {
 
 pub struct MockTransport {
     requests: Arc<Mutex<Vec<ReadRequest>>>,
+    sent: Arc<Mutex<Vec<Value>>>,
+    fail_sends: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MockTransport {
     pub fn new() -> MockTransport {
         MockTransport {
             requests: Arc::new(Mutex::new(Vec::new())),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            fail_sends: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -112,6 +131,28 @@ impl MockTransport {
     #[cfg(test)]
     pub fn request_log(&self) -> Arc<Mutex<Vec<ReadRequest>>> {
         Arc::clone(&self.requests)
+    }
+
+    /// A shared handle on the log of command bodies sent, in order.
+    /// The S2 battery asserts against this: what the log holds is what
+    /// would have reached the wire, byte for byte in meaning.
+    #[cfg(test)]
+    pub fn sent_log(&self) -> Arc<Mutex<Vec<Value>>> {
+        Arc::clone(&self.sent)
+    }
+
+    /// Inject send failures, to exercise the session-drop path.
+    #[cfg(test)]
+    pub fn set_fail_sends(&self, fail: bool) {
+        self.fail_sends
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A shared handle on the send-failure flag, so a test can drop
+    /// the session after the transport has been handed to the server.
+    #[cfg(test)]
+    pub fn fail_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.fail_sends)
     }
 
     pub fn fixture_toys() -> Vec<Toy> {
@@ -154,6 +195,27 @@ impl ReadTransport for MockTransport {
     fn discover(&self) -> Result<Vec<Toy>> {
         self.record(ReadRequest::Discover);
         Ok(MockTransport::fixture_toys())
+    }
+}
+
+impl OutputTransport for MockTransport {
+    fn send_command(&self, body: &Value) -> Result<()> {
+        // Record before the failure check: an attempted send is a fact
+        // the battery asserts on, even when the drop swallows it.
+        {
+            let mut sent = self
+                .sent
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            sent.push(body.clone());
+        }
+        if self.fail_sends.load(std::sync::atomic::Ordering::SeqCst) {
+            return err(
+                ErrorCode::TargetUnreachable,
+                "mock transport: send failed (injected session drop)",
+            );
+        }
+        Ok(())
     }
 }
 
@@ -217,6 +279,58 @@ impl ReadTransport for RealTransport {
         }
         parse_get_toys(&body)
     }
+}
+
+impl OutputTransport for RealTransport {
+    fn send_command(&self, body: &Value) -> Result<()> {
+        let url = self.target.command_url();
+        let response = self
+            .agent
+            .post(&url)
+            .set("X-platform", PLATFORM_NAME)
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string());
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::Status(status, _)) => {
+                return err(ErrorCode::AppError, format!("{url} answered HTTP {status}"));
+            }
+            Err(ureq::Error::Transport(transport)) => {
+                return err(ErrorCode::TargetUnreachable, format!("{url}: {transport}"));
+            }
+        };
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(RESPONSE_BYTES_MAX + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|cause| {
+                LovenseError::new(ErrorCode::TargetUnreachable, format!("{url}: {cause}"))
+            })?;
+        if bytes.len() as u64 > RESPONSE_BYTES_MAX {
+            return err(
+                ErrorCode::ResponseInvalid,
+                format!("response exceeds {RESPONSE_BYTES_MAX} bytes"),
+            );
+        }
+        parse_command_ack(&bytes)
+    }
+}
+
+/// Parse an output command's acknowledgement. The app answers command
+/// posts with a numeric `code`; 200 is the only success. Anything else
+/// is surfaced as a structured error, never swallowed: a caller who
+/// believes output started when the app refused it is a safety bug.
+pub fn parse_command_ack(body: &[u8]) -> Result<()> {
+    let root: Value = serde_json::from_slice(body)
+        .map_err(|cause| invalid_response(format!("not JSON: {cause}")))?;
+    let Some(code) = root.get("code").and_then(Value::as_i64) else {
+        return Err(invalid_response("no numeric `code` field"));
+    };
+    if code != 200 {
+        return err(ErrorCode::AppError, format!("Lovense API code {code}"));
+    }
+    Ok(())
 }
 
 /// Parse a GetToys answer. Documented shape:
@@ -465,5 +579,58 @@ mod tests {
             parse_get_toys(body.as_bytes()).unwrap_err().code,
             ErrorCode::ResponseInvalid
         );
+    }
+
+    // --- S2 output side ---
+
+    #[test]
+    fn mock_records_sent_bodies_in_order() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let body = serde_json::json!({"command": "Function", "action": "Stop", "timeSec": 0, "toy": "", "apiVer": 1});
+        mock.send_command(&body).unwrap();
+        assert_eq!(*sent.lock().unwrap(), vec![body]);
+    }
+
+    #[test]
+    fn mock_injected_drop_records_the_attempt_and_errors() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        mock.set_fail_sends(true);
+        let error = mock
+            .send_command(&serde_json::json!({"command": "Preset", "name": "pulse"}))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::TargetUnreachable);
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            1,
+            "the attempt is a recorded fact"
+        );
+    }
+
+    #[test]
+    fn command_ack_accepts_only_code_200() {
+        assert!(parse_command_ack(br#"{"code":200,"type":"OK"}"#).is_ok());
+        let refused = parse_command_ack(br#"{"code":403,"type":"error"}"#).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::AppError);
+        for body in ["", "{}", "{oops", r#"{"code":"200"}"#] {
+            assert_eq!(
+                parse_command_ack(body.as_bytes()).unwrap_err().code,
+                ErrorCode::ResponseInvalid,
+                "body {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_send_against_loopback_stub_posts_the_gate_body() {
+        let mut stub = AppStub::start(r#"{"code":200,"type":"OK"}"#, 1, 200);
+        let body = serde_json::json!({"command": "Function", "action": "Vibrate:7", "timeSec": 3, "toy": "", "apiVer": 1});
+        loopback(stub.port).send_command(&body).unwrap();
+        let received = stub.received();
+        assert_eq!(received["path"], "/command");
+        assert_eq!(received["platform"], PLATFORM_NAME);
+        let posted: Value = serde_json::from_str(received["body"].as_str().unwrap()).unwrap();
+        assert_eq!(posted, body);
     }
 }

@@ -1,12 +1,14 @@
 //! lovense-mcp — MCP stdio server over the Lovense Standard API local
-//! Game Mode route. Stage S1: the read core (status and toy discovery).
-//! There is no output path in this stage.
+//! Game Mode route. Stage S2: the read core (status and toy discovery)
+//! plus the output core, every output behind the pure `decide()` gate.
 
 #![forbid(unsafe_code)]
 
 mod config;
+mod decide;
 mod error;
 mod server;
+mod state;
 #[cfg(test)]
 mod test_stub;
 mod transport;
@@ -34,13 +36,17 @@ fn main() -> ExitCode {
         },
     };
     eprintln!(
-        "lovense-mcp {}: transport {}, S1 read core (no output path)",
+        "lovense-mcp {}: transport {}, S2 output core (decide()-gated)",
         server::SERVER_VERSION,
         config.transport.as_str()
     );
     let transport = transport::from_config(&config);
     let server = Server::new(config, transport);
-    match server::serve(&server, std::io::stdin().lock(), std::io::stdout().lock()) {
+    match server::serve(
+        &server,
+        std::io::BufReader::new(std::io::stdin()),
+        std::io::stdout().lock(),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("lovense-mcp: stdio failed: {error}");

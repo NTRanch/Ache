@@ -54,11 +54,21 @@ fn tool_text(response: &Value) -> Value {
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// One full mock session: discovery, a denied output while disarmed,
+/// arm, an over-ceiling function (clamped on the wire), a pattern, a
+/// preset, stop, and the final state.
 const SMOKE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lovense_status","arguments":{}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lovense_toys","arguments":{}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lovense_function","arguments":{"feature":"Vibrate","strength":5,"time_sec":5}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"lovense_arm","arguments":{}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"lovense_function","arguments":{"feature":"Vibrate","strength":25,"time_sec":5}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"lovense_pattern","arguments":{"features":"v","interval_ms":500,"strengths":[10,20],"time_sec":4}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"lovense_preset","arguments":{"name":"pulse","time_sec":9}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"lovense_stop","arguments":{}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"lovense_status","arguments":{}}}
 "#;
 
 // --- validation ---
@@ -74,28 +84,57 @@ fn stdio_smoke_over_mock_transport() {
         .collect();
     assert_eq!(
         ids,
-        [1, 2, 3, 4],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         "one response per request, none for the notification"
     );
     assert_eq!(lines[0]["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(lines[0]["result"]["serverInfo"]["name"], "lovense");
-    assert_eq!(lines[0]["result"]["serverInfo"]["version"], "0.1.0");
+    assert_eq!(lines[0]["result"]["serverInfo"]["version"], "0.2.0");
     let names: Vec<&str> = lines[1]["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["lovense_status", "lovense_toys"]);
+    assert_eq!(
+        names,
+        [
+            "lovense_status",
+            "lovense_toys",
+            "lovense_arm",
+            "lovense_disarm",
+            "lovense_function",
+            "lovense_pattern",
+            "lovense_preset",
+            "lovense_stop",
+        ]
+    );
+    // Status: mock, disarmed, nothing active.
     assert_eq!(lines[2]["result"]["isError"], false);
     assert_eq!(tool_text(&lines[2])["state"], "mock");
-    assert_eq!(lines[3]["result"]["isError"], false);
+    assert_eq!(tool_text(&lines[2])["armed"], false);
     assert_eq!(tool_text(&lines[3])["count"], 2);
+    // Output while disarmed: denied by the gate, code not_armed.
+    assert_eq!(lines[4]["result"]["isError"], true);
+    assert_eq!(tool_text(&lines[4])["error"]["code"], "not_armed");
+    // Arm, then the over-ceiling function lands clamped at 20.
+    assert_eq!(tool_text(&lines[5])["armed"], true);
+    assert_eq!(lines[6]["result"]["isError"], false);
+    assert_eq!(tool_text(&lines[6])["effective"]["strength"], 20);
+    assert_eq!(tool_text(&lines[6])["gate"]["clamped"], true);
+    assert_eq!(tool_text(&lines[6])["command"]["action"], "Vibrate:20");
+    // Pattern and preset run; stop zeroes and latches off.
+    assert_eq!(tool_text(&lines[7])["command"]["rule"], "V:1;F:v;S:500#");
+    assert_eq!(tool_text(&lines[8])["command"]["name"], "pulse");
+    assert_eq!(tool_text(&lines[9])["stop_sent"], true);
+    assert_eq!(tool_text(&lines[10])["armed"], false);
+    assert_eq!(tool_text(&lines[10])["output_active"], false);
 
     let transcript = format!(
         "== stdio smoke: lovense-mcp, mock transport, no config file\n== requests\n{SMOKE}\
-         == responses\n{}== stderr\n{}== result: PASS (initialize; tools/list = exactly \
-         lovense_status, lovense_toys; lovense_status state=mock; lovense_toys 2 fixture toys)\n",
+         == responses\n{}== stderr\n{}== result: PASS (initialize; tools/list = the eight \
+         tools; status mock/disarmed; disarmed function denied not_armed; arm; function \
+         25 clamped to 20; pattern; preset; stop; final status disarmed and inactive)\n",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
