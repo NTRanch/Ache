@@ -133,15 +133,29 @@ already rejected for STROBE in Phase 2's surface notes.
       labeled as mock, real transport with empty host returns
       target_unconfigured with no network call, and the only
       wire command in the source is GetToys.)
-- [ ] S2: output core — arm/disarm, function, pattern, preset,
+- [x] S2: output core — arm/disarm, function, pattern, preset,
       stop, behind a pure decide() gate (master defaults off,
       ceiling clamped in code, deny final). Adversarial battery
       green: over-ceiling strengths, 51-strength patterns,
       sub-floor intervals, output while disarmed or targetless,
       malformed rules, stop mid-pattern.
-- [ ] S3: hardening — heartbeat watchdog zeroes output on
-      silence, session-drop path zeroes output with cleanup
-      logged, conformance pass against Inspector, rose, phlow.
+      (Gate PASS 2026-10-26: branch pax/lovense-mcp-s1, uncommitted
+      working tree; fmt clean, clippy -D warnings clean, cargo
+      test 88 passed / 0 failed (36 validation / 52 adversarial),
+      stdio smoke verified by the reviewer: disarmed deny → arm →
+      strength 25 clamped to wire Vibrate:20 → pattern → preset →
+      stop. Watchdog, session-drop zeroing, and the EOF shutdown
+      zero were pulled forward from S3 into S2 by the build's
+      contract scope; nix build + Diver gate owed at the primo
+      mirror before any repo landing. Joint gate with the
+      torogao-haptics contract client held the same day: its
+      lovense_function argument names, time_sec handling, and
+      zero-frame path corrected to this server's schemas —
+      see the haptics workdir JOINT-GATE.md.)
+- [ ] S3: hardening — conformance pass against Inspector, rose,
+      phlow, plus per-code app-error mapping. (Scope narrowed
+      2026-10-26: the heartbeat watchdog, session-drop zeroing,
+      and shutdown zero already landed in S2.)
 - [ ] S4: live rung — real hardware, lowest level, stop latency
       measured. Only on an explicit go from the studio, with
       the account holder present at the machine. (This is the
