@@ -1,11 +1,16 @@
 //! Hand-rolled MCP stdio server: newline-delimited JSON-RPC 2.0, protocol
-//! era 2024-11-05. Eight tools: two read-only (status, toys) and six for
-//! the output core (arm, disarm, function, pattern, preset, stop), every
-//! one of which passes the `decide()` gate in `decide.rs` before anything
-//! can reach the wire. Protocol misuse (unknown method or tool, bad
-//! arguments) is a JSON-RPC error; an operational failure (no target,
-//! unreachable app, a gate deny) is a tool result with `isError: true`
-//! and the structured error as its text.
+//! era 2024-11-05. Ten tools. The original eight (`lovense_*`) keep their
+//! names and shapes: two read-only (status, toys) and six for the output
+//! core (arm, disarm, function, pattern, preset, stop). Two unified
+//! read-only tools (`ache_devices`, `ache_device`) enumerate devices
+//! across both providers — the Lovense Standard API provider and the
+//! embedded Buttplug provider — with capabilities as data; the output
+//! tools route to either provider when given a unified `device` id.
+//! Every output, on either provider, passes the one `decide()` gate in
+//! `decide.rs` before anything can reach a device. Protocol misuse
+//! (unknown method or tool, bad arguments) is a JSON-RPC error; an
+//! operational failure (no target, unreachable app, a gate deny) is a
+//! tool result with `isError: true` and the structured error as its text.
 
 use std::io::{self, BufRead, Read, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -16,14 +21,16 @@ use serde_json::{Map, Value, json};
 
 use crate::config::{Config, TransportKind};
 use crate::decide::{
-    Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent, decide,
+    AllowedOutput, Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent,
+    TOY_ID_BYTES_MAX, decide, decide_plan, lovense_wire,
 };
-use crate::error::{ErrorCode, LovenseError, truncate};
+use crate::error::{AcheError, ErrorCode, truncate};
+use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
 use crate::state::SafetyState;
 use crate::transport::Transport;
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
-pub const SERVER_NAME: &str = "lovense";
+pub const SERVER_NAME: &str = "ache";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Longest accepted input line, in bytes. Longer lines are discarded
 /// unread and answered with an invalid-request error.
@@ -41,8 +48,9 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-/// Every tool the server serves, in `tools/list` order.
-const TOOL_NAMES: [&str; 8] = [
+/// Every tool the server serves, in `tools/list` order. The original
+/// eight keep their positions; the unified tools append.
+const TOOL_NAMES: [&str; 10] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -51,15 +59,22 @@ const TOOL_NAMES: [&str; 8] = [
     "lovense_pattern",
     "lovense_preset",
     "lovense_stop",
+    "ache_devices",
+    "ache_device",
 ];
 
 pub struct Server {
     config: Config,
-    /// `None` exactly when the config names the real transport without a
-    /// host. Then no transport exists and nothing can reach the wire.
-    transport: Option<Box<dyn Transport>>,
+    /// The Lovense provider. Its transport is `None` exactly when the
+    /// config names the real transport without a host; then nothing can
+    /// reach the Lovense wire.
+    lovense: LovenseProvider,
+    /// The Buttplug provider: embedded in production, a fixture in mock
+    /// mode, or inert (disabled / not wired by a bare constructor).
+    buttplug: Box<dyn DeviceProvider>,
     /// The safety state machine: arm latch, output activity, watchdog
-    /// bookkeeping, session health.
+    /// bookkeeping, session health. One state for the whole server —
+    /// the master toggle and the watchdog govern both providers.
     state: Mutex<SafetyState>,
 }
 
@@ -67,11 +82,11 @@ pub struct Server {
 /// error, an operational failure with an `isError` tool result.
 enum CallError {
     Protocol(i64, String),
-    Operational(LovenseError),
+    Operational(AcheError),
 }
 
-impl From<LovenseError> for CallError {
-    fn from(error: LovenseError) -> CallError {
+impl From<AcheError> for CallError {
+    fn from(error: AcheError) -> CallError {
         CallError::Operational(error)
     }
 }
@@ -83,12 +98,28 @@ impl From<(i64, String)> for CallError {
 }
 
 impl Server {
+    /// A server with the Lovense provider wired; the Buttplug
+    /// provider is present in the surface but inert until
+    /// [`Server::with_buttplug`] replaces it (production wiring in
+    /// `main` always does).
     pub fn new(config: Config, transport: Option<Box<dyn Transport>>) -> Server {
+        let lovense = LovenseProvider::new(&config, transport);
         Server {
             config,
-            transport,
+            lovense,
+            buttplug: Box::new(InertProvider::unavailable(
+                ProviderId::Buttplug,
+                "no buttplug provider is wired in this server",
+            )),
             state: Mutex::new(SafetyState::new()),
         }
+    }
+
+    /// Wire the Buttplug provider behind the seam.
+    #[must_use]
+    pub fn with_buttplug(mut self, buttplug: Box<dyn DeviceProvider>) -> Server {
+        self.buttplug = buttplug;
+        self
     }
 
     fn lock_state(&self) -> MutexGuard<'_, SafetyState> {
@@ -99,13 +130,12 @@ impl Server {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Whether output could reach a target at all: a transport exists
-    /// and the config gate (real transport needs a host) permits it.
-    /// This is the same gate `lovense_toys` applies before discovery.
+    /// Whether output could reach a target at all: either provider
+    /// can accept output. The Lovense half is the original rule (a
+    /// transport exists and the config gate permits it); the Buttplug
+    /// half is its probe.
     fn target_configured(&self) -> bool {
-        let unconfigured =
-            self.config.transport == TransportKind::Real && self.config.host.is_empty();
-        self.transport.is_some() && !unconfigured
+        self.lovense.target_configured() || self.buttplug.probe().available
     }
 
     fn snapshot(&self) -> crate::decide::GateSnapshot {
@@ -205,23 +235,42 @@ impl Server {
                 check_no_arguments(arguments)?;
                 Ok(self.stop()?)
             }
+            "ache_devices" => {
+                check_no_arguments(arguments)?;
+                Ok(self.devices()?)
+            }
+            "ache_device" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["device"])?;
+                let device = required_string(&args, "device")?;
+                Ok(self.device(&device)?)
+            }
             "lovense_function" => {
                 let args = arguments_object(arguments)?;
-                check_fields_allowed(&args, &["feature", "strength", "time_sec", "toy"])?;
+                check_fields_allowed(&args, &["feature", "strength", "time_sec", "toy", "device"])?;
+                let device = optional_string(&args, "device")?;
                 let intent = FunctionIntent {
                     feature: required_string(&args, "feature")?,
                     strength: required_int(&args, "strength")?,
                     time_sec: required_int(&args, "time_sec")?,
                     toy: optional_string(&args, "toy")?,
                 };
-                Ok(self.run_output(OutputIntent::Function(intent))?)
+                Ok(self.run_output(OutputIntent::Function(intent), device.as_deref())?)
             }
             "lovense_pattern" => {
                 let args = arguments_object(arguments)?;
                 check_fields_allowed(
                     &args,
-                    &["features", "interval_ms", "strengths", "time_sec", "toy"],
+                    &[
+                        "features",
+                        "interval_ms",
+                        "strengths",
+                        "time_sec",
+                        "toy",
+                        "device",
+                    ],
                 )?;
+                let device = optional_string(&args, "device")?;
                 let intent = PatternIntent {
                     features: optional_string(&args, "features")?.unwrap_or_default(),
                     interval_ms: required_int(&args, "interval_ms")?,
@@ -229,24 +278,25 @@ impl Server {
                     time_sec: required_int(&args, "time_sec")?,
                     toy: optional_string(&args, "toy")?,
                 };
-                Ok(self.run_output(OutputIntent::Pattern(intent))?)
+                Ok(self.run_output(OutputIntent::Pattern(intent), device.as_deref())?)
             }
             "lovense_preset" => {
                 let args = arguments_object(arguments)?;
-                check_fields_allowed(&args, &["name", "time_sec", "toy"])?;
+                check_fields_allowed(&args, &["name", "time_sec", "toy", "device"])?;
+                let device = optional_string(&args, "device")?;
                 let intent = PresetIntent {
                     name: required_string(&args, "name")?,
                     time_sec: required_int(&args, "time_sec")?,
                     toy: optional_string(&args, "toy")?,
                 };
-                Ok(self.run_output(OutputIntent::Preset(intent))?)
+                Ok(self.run_output(OutputIntent::Preset(intent), device.as_deref())?)
             }
             _ => unreachable!("tool names are validated before dispatch"),
         }
     }
 
     fn status(&self) -> Value {
-        let probe = self.transport.as_ref().map(|transport| transport.probe());
+        let probe = self.lovense.transport_probe();
         let (state, note) = match (self.config.transport, &probe) {
             (TransportKind::Mock, _) => (
                 "mock",
@@ -274,29 +324,23 @@ impl Server {
             "last_event": safety.last_event(),
             "intensity_ceiling": self.config.intensity_ceiling,
             "watchdog_secs": self.config.watchdog_secs,
-            "output_path": "gated: every output passes decide(); stop, disarm, the \
-                watchdog, a session drop, and shutdown each zero output and latch \
-                the master off",
+            "output_path": "gated: every output on every provider passes the one \
+                decide() gate; stop, disarm, the watchdog, a session drop, and \
+                shutdown each zero output on both providers and latch the master off",
             "note": note,
+            "providers": {
+                "lovense": self.lovense.probe().to_json(),
+                "buttplug": self.buttplug.probe().to_json(),
+            },
             "server": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
     }
 
-    fn toys(&self) -> Result<Value, LovenseError> {
-        // Gate on the config first, so a real transport without a host can
-        // never reach any transport, whatever was injected.
-        let unconfigured =
-            self.config.transport == TransportKind::Real && self.config.host.is_empty();
-        let transport = match &self.transport {
-            Some(transport) if !unconfigured => transport,
-            _ => {
-                return Err(LovenseError::new(
-                    ErrorCode::TargetUnconfigured,
-                    "transport is real but no host is configured; no request was made",
-                ));
-            }
-        };
-        let toys = transport.discover()?;
+    fn toys(&self) -> Result<Value, AcheError> {
+        // The provider applies the config gate first, so a real
+        // transport without a host never reaches any transport,
+        // whatever was injected.
+        let toys = self.lovense.toys()?;
         let source = match self.config.transport {
             TransportKind::Mock => "mock_fixture",
             TransportKind::Real => "live_discovery",
@@ -309,11 +353,94 @@ impl Server {
         }))
     }
 
+    /// Unified discovery: every device either provider can see, in
+    /// the unified model, with a per-provider account of what
+    /// happened. A provider that cannot enumerate contributes its
+    /// typed error to its entry — never silence — and the call itself
+    /// fails only when NO provider could enumerate at all.
+    fn devices(&self) -> Result<Value, AcheError> {
+        let mut all: Vec<Device> = Vec::new();
+        let mut providers = Map::new();
+        let mut enumerated = false;
+        let mut first_error: Option<AcheError> = None;
+        for provider in [
+            &self.lovense as &dyn DeviceProvider,
+            self.buttplug.as_ref() as &dyn DeviceProvider,
+        ] {
+            let probe = provider.probe();
+            let mut entry = Map::new();
+            entry.insert("state".into(), json!(probe.state));
+            entry.insert("available".into(), json!(probe.available));
+            match provider.discover() {
+                Ok(devices) => {
+                    enumerated = true;
+                    entry.insert("count".into(), json!(devices.len()));
+                    all.extend(devices);
+                }
+                Err(error) => {
+                    entry.insert("error".into(), error.to_json()["error"].clone());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+            providers.insert(probe.provider.as_str().into(), Value::Object(entry));
+        }
+        if !enumerated {
+            return Err(first_error.expect("no provider enumerated and none errored"));
+        }
+        Ok(json!({
+            "count": all.len(),
+            "devices": all.iter().map(Device::to_json).collect::<Vec<_>>(),
+            "providers": Value::Object(providers),
+        }))
+    }
+
+    /// One device by unified id, with its capabilities as data.
+    fn device(&self, id: &str) -> Result<Value, AcheError> {
+        Ok(self.resolve_device(id)?.to_json())
+    }
+
+    /// Resolve a unified device id to the device, asking only the
+    /// provider the id names. A provider that cannot enumerate
+    /// surfaces its own typed error — absence is never claimed on the
+    /// word of a provider that could not look.
+    fn resolve_device(&self, id: &str) -> Result<Device, AcheError> {
+        if id.len() > TOY_ID_BYTES_MAX || id.chars().any(char::is_control) {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                format!(
+                    "device id must be at most {TOY_ID_BYTES_MAX} bytes with no control characters"
+                ),
+            ));
+        }
+        let provider: &dyn DeviceProvider = if id.starts_with("lovense:") {
+            &self.lovense
+        } else if id.starts_with("buttplug:") {
+            self.buttplug.as_ref()
+        } else {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                format!("device id {id:?} must start with `lovense:` or `buttplug:`"),
+            ));
+        };
+        let devices = provider.discover()?;
+        devices
+            .into_iter()
+            .find(|device| device.id == id)
+            .ok_or_else(|| {
+                AcheError::new(
+                    ErrorCode::DeviceNotFound,
+                    format!("no device {id:?} is present"),
+                )
+            })
+    }
+
     /// Arm the master toggle. Explicit, always: nothing else in the
     /// server arms, and arming refuses without a target.
-    fn arm(&self) -> Result<Value, LovenseError> {
+    fn arm(&self) -> Result<Value, AcheError> {
         if !self.target_configured() {
-            return Err(LovenseError::new(
+            return Err(AcheError::new(
                 ErrorCode::TargetUnconfigured,
                 "no target is configured; arming is refused",
             ));
@@ -333,7 +460,7 @@ impl Server {
 
     /// Master off. If output is active it is zeroed on the wire first,
     /// synchronously, before this call answers.
-    fn disarm(&self) -> Result<Value, LovenseError> {
+    fn disarm(&self) -> Result<Value, AcheError> {
         let stop_sent = self.zero_output("disarm: output zeroed")?;
         Ok(json!({
             "armed": false,
@@ -345,7 +472,7 @@ impl Server {
     /// The panic zero. The gate allows it in every state; it zeroes
     /// output on the wire synchronously and latches the master off, so
     /// recovery is always a fresh explicit arm.
-    fn stop(&self) -> Result<Value, LovenseError> {
+    fn stop(&self) -> Result<Value, AcheError> {
         let stop_sent = self.zero_output("stop: output zeroed")?;
         Ok(json!({
             "armed": false,
@@ -362,87 +489,123 @@ impl Server {
     /// the same call, so the zero is synchronous either way. A failed
     /// send is a session drop (state still zeroes; the error surfaces).
     /// Returns whether a stop body was actually sent.
-    fn zero_output(&self, event: &str) -> Result<bool, LovenseError> {
+    fn zero_output(&self, event: &str) -> Result<bool, AcheError> {
         let sent = self.send_stop_strict()?;
         self.lock_state().zero_and_disarm(event);
         Ok(sent)
     }
 
-    /// Send the gate's Stop body. `Ok(false)` means there was no
-    /// transport to send on (no target configured): the local zero
-    /// still stands. A send failure marks the session dropped and is
-    /// returned as the error.
-    fn send_stop_strict(&self) -> Result<bool, LovenseError> {
-        let Some(transport) = &self.transport else {
-            return Ok(false);
-        };
-        if !self.target_configured() {
-            return Ok(false);
-        }
-        let Decision::Allow { body, .. } = decide(&self.snapshot(), &OutputIntent::Stop) else {
-            unreachable!("the gate always allows stop");
-        };
-        match transport.send_command(&body) {
-            Ok(()) => Ok(true),
-            Err(error) => {
+    /// Zero every provider. Both providers are ALWAYS attempted, even
+    /// when the first fails: a panic stop that leaves the second
+    /// provider running because the first one's send failed is not a
+    /// stop. `Ok(false)` means no provider had a target to zero: the
+    /// local zero still stands. A zero failure on either provider
+    /// marks the session dropped; the first failure is the error.
+    fn send_stop_strict(&self) -> Result<bool, AcheError> {
+        let lovense = self.lovense.zero();
+        let buttplug = self.buttplug.zero();
+        match (lovense, buttplug) {
+            (Ok(lovense_sent), Ok(buttplug_sent)) => Ok(lovense_sent || buttplug_sent),
+            (Err(error), _) | (_, Err(error)) => {
                 self.lock_state().on_session_drop();
                 Err(error)
             }
         }
     }
 
-    /// Best-effort wire zero for the paths that must never fail: a
-    /// watchdog trip, shutdown, recovery after a drop. State has
-    /// already been zeroed by the caller; a send error here means the
-    /// session is gone and is recorded as a drop.
+    /// Best-effort zero on both providers, for the paths that must
+    /// never fail: a watchdog trip, shutdown, recovery after a drop.
+    /// Both are attempted even when one fails (never short-circuited).
+    /// State has already been zeroed by the caller; a failure here
+    /// means the session is gone and is recorded as a drop.
     fn send_stop_best_effort(&self) {
-        let Some(transport) = &self.transport else {
-            return;
-        };
-        if !self.target_configured() {
-            return;
-        }
-        let Decision::Allow { body, .. } = decide(&self.snapshot(), &OutputIntent::Stop) else {
-            return;
-        };
-        if transport.send_command(&body).is_err() {
+        let lovense_failed = self.lovense.zero().is_err();
+        let buttplug_failed = self.buttplug.zero().is_err();
+        if lovense_failed || buttplug_failed {
             self.lock_state().on_session_drop();
         }
     }
 
-    /// Run one gated output intent (function, pattern, preset) through
-    /// `decide()` and, on allow, onto the wire. A deny is final and
-    /// sends nothing. A send failure is a session drop: output state
-    /// zeroes, the master latches off, and a best-effort zero follows
-    /// the failed command.
-    fn run_output(&self, intent: OutputIntent) -> Result<Value, LovenseError> {
+    /// Run one gated output intent (function, pattern, preset). Without
+    /// a `device` argument this is the original Lovense path, unchanged:
+    /// `decide()` against the Lovense caps, the gate's body onto the
+    /// transport. With a unified `device` id, the intent is planned by
+    /// the same gate against that device's own capabilities
+    /// (`decide_plan`) and executed by the device's provider. A deny is
+    /// final and sends nothing, on either path. A send failure is a
+    /// session drop: output state zeroes, the master latches off, and a
+    /// best-effort zero on both providers follows the failed command.
+    fn run_output(&self, intent: OutputIntent, device: Option<&str>) -> Result<Value, AcheError> {
         let snapshot = self.snapshot();
-        let (body, effective, clamped) = match decide(&snapshot, &intent) {
-            Decision::Allow {
-                body,
-                effective,
-                clamped,
-            } => (body, effective, clamped),
-            Decision::Deny(error) => return Err(error),
-        };
-        let Some(transport) = &self.transport else {
-            // The gate allowed output, which requires a target; a
-            // hand-built server without one lands here instead of on
-            // a wire.
-            return Err(LovenseError::new(
-                ErrorCode::TargetUnconfigured,
-                "no transport exists; nothing was sent",
-            ));
-        };
-        match transport.send_command(&body) {
-            Ok(()) => {
-                self.lock_state().mark_output_started();
-                Ok(json!({
+        let Some(device_id) = device else {
+            let (body, effective, clamped) = match decide(&snapshot, &intent) {
+                Decision::Allow {
+                    body,
+                    effective,
+                    clamped,
+                } => (body, effective, clamped),
+                Decision::Deny(error) => return Err(error),
+            };
+            return self.finish_output(
+                self.lovense.send_gate_body(&body),
+                json!({
                     "sent": true,
                     "gate": { "decision": "allow", "clamped": clamped },
                     "effective": effective,
                     "command": body,
-                }))
+                }),
+            );
+        };
+        // Unified routing: resolve the device (its provider enumerates;
+        // a provider that cannot look surfaces its own typed error),
+        // plan against its capabilities, execute through its provider.
+        let target = self.resolve_device(device_id)?;
+        let intent = retarget(intent, &target);
+        let plan = decide_plan(&snapshot, &intent, &target.caps())?;
+        let clamped = plan.clamped();
+        match target.provider {
+            ProviderId::Lovense => {
+                let (body, effective) = lovense_wire(&plan);
+                self.finish_output(
+                    self.lovense.send_gate_body(&body),
+                    json!({
+                        "sent": true,
+                        "provider": "lovense",
+                        "device": target.id,
+                        "gate": { "decision": "allow", "clamped": clamped },
+                        "effective": effective,
+                        "command": body,
+                    }),
+                )
+            }
+            ProviderId::Buttplug => {
+                let effective = plan_effective(&plan);
+                self.finish_output(
+                    self.buttplug.execute(&plan),
+                    json!({
+                        "sent": true,
+                        "provider": "buttplug",
+                        "device": target.id,
+                        "gate": { "decision": "allow", "clamped": clamped },
+                        "effective": effective,
+                    }),
+                )
+            }
+        }
+    }
+
+    /// The shared tail of every output path: on success the output is
+    /// active; on failure the session drops (state zeroes, the master
+    /// latches off, a best-effort zero follows).
+    fn finish_output(
+        &self,
+        sent: Result<(), AcheError>,
+        result: Value,
+    ) -> Result<Value, AcheError> {
+        match sent {
+            Ok(()) => {
+                self.lock_state().mark_output_started();
+                Ok(result)
             }
             Err(error) => {
                 self.lock_state().on_session_drop();
@@ -460,9 +623,7 @@ impl Server {
             .lock_state()
             .trip_watchdog_if_expired(self.config.watchdog_secs);
         if tripped {
-            eprintln!(
-                "lovense-mcp: watchdog expired with output active; output zeroed, re-arm required"
-            );
+            eprintln!("ache: watchdog expired with output active; output zeroed, re-arm required");
             self.send_stop_best_effort();
         }
         tripped
@@ -487,6 +648,86 @@ impl Server {
         self.lock_state().zero_and_disarm("shutdown: output zeroed");
         self.send_stop_best_effort();
         true
+    }
+}
+
+/// Aim an intent at a resolved unified device: the gate's target
+/// selector becomes the device's own id space — the raw toy id for a
+/// Lovense device (what its wire expects), the unified id for a
+/// Buttplug device (what its provider resolves). A caller-supplied
+/// `toy` is replaced: when `device` is given, it is the target.
+fn retarget(intent: OutputIntent, device: &Device) -> OutputIntent {
+    let selector = match device.provider {
+        ProviderId::Lovense => device
+            .id
+            .strip_prefix("lovense:")
+            .unwrap_or(&device.id)
+            .to_string(),
+        ProviderId::Buttplug => device.id.clone(),
+    };
+    match intent {
+        OutputIntent::Function(mut intent) => {
+            intent.toy = Some(selector);
+            OutputIntent::Function(intent)
+        }
+        OutputIntent::Pattern(mut intent) => {
+            intent.toy = Some(selector);
+            OutputIntent::Pattern(intent)
+        }
+        OutputIntent::Preset(mut intent) => {
+            intent.toy = Some(selector);
+            OutputIntent::Preset(intent)
+        }
+        OutputIntent::Stop => OutputIntent::Stop,
+    }
+}
+
+/// The effective-values report for a plan executed by a non-Lovense
+/// provider (the Lovense path reports through `lovense_wire`, whose
+/// report the original tools have always carried).
+fn plan_effective(plan: &AllowedOutput) -> Value {
+    match plan {
+        AllowedOutput::Function {
+            feature,
+            strength,
+            time_sec,
+            toy,
+            ..
+        } => json!({
+            "feature": feature,
+            "strength": strength,
+            "time_sec": time_sec,
+            "device": toy,
+        }),
+        AllowedOutput::Pattern {
+            features,
+            interval_ms,
+            strengths,
+            time_sec,
+            toy,
+            ..
+        } => json!({
+            "features": features,
+            "interval_ms": interval_ms,
+            "strengths": strengths,
+            "time_sec": time_sec,
+            "device": toy,
+        }),
+        AllowedOutput::Preset {
+            name,
+            time_sec,
+            toy,
+        } => json!({
+            "name": name,
+            "time_sec": time_sec,
+            "device": toy,
+        }),
+        AllowedOutput::Stop => json!({
+            "action": "Stop",
+            "strength": 0,
+            "time_sec": 0,
+            "device": "",
+        }),
     }
 }
 
@@ -520,7 +761,7 @@ pub fn serve(
             let read = match (&mut input).take(limit).read_until(b'\n', &mut line) {
                 Ok(read) => read,
                 Err(error) => {
-                    eprintln!("lovense-mcp: stdin read failed: {error}");
+                    eprintln!("ache: stdin read failed: {error}");
                     let _ = sender.send(LineEvent::End);
                     return;
                 }
@@ -588,7 +829,7 @@ pub fn serve(
         }
     }
     if server.zero_on_shutdown() {
-        eprintln!("lovense-mcp: input closed with output active; stop sent, output zeroed");
+        eprintln!("ache: input closed with output active; stop sent, output zeroed");
     }
     result
 }
@@ -598,12 +839,13 @@ fn initialize_result() -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-        "instructions": "lovense — Lovense local Game Mode, stage S2 output core. \
-            Tools: lovense_status, lovense_toys, lovense_arm, lovense_disarm, \
-            lovense_function, lovense_pattern, lovense_preset, lovense_stop. \
-            Output is off by default: arm explicitly, every output passes a \
-            safety gate that clamps intensity to the configured ceiling, and \
-            stop always works.",
+        "instructions": "ache — unified haptics: Lovense local Game Mode and an \
+            embedded Buttplug server behind one surface. Tools: lovense_status, \
+            lovense_toys, lovense_arm, lovense_disarm, lovense_function, \
+            lovense_pattern, lovense_preset, lovense_stop, ache_devices, \
+            ache_device. Output is off by default: arm explicitly, every output \
+            on either provider passes the one safety gate that clamps intensity \
+            to the configured ceiling, and stop always works.",
     })
 }
 
@@ -612,6 +854,13 @@ fn tool_list() -> Value {
     let toy_argument = json!({
         "type": "string",
         "description": "Toy id from lovense_toys; omit to target every toy."
+    });
+    let device_argument = json!({
+        "type": "string",
+        "description": "Unified device id from ache_devices (e.g. \"buttplug:0\" or \
+            \"lovense:<toy id>\"). When given, it selects the target device and its \
+            provider, the gate plans against that device's reported capabilities, \
+            and `toy` is ignored."
     });
     let time_argument = json!({
         "type": "integer",
@@ -701,6 +950,7 @@ fn tool_list() -> Value {
                     },
                     "time_sec": time_argument.clone(),
                     "toy": toy_argument.clone(),
+                    "device": device_argument.clone(),
                 },
                 "required": ["feature", "strength", "time_sec"],
                 "additionalProperties": false,
@@ -742,6 +992,7 @@ fn tool_list() -> Value {
                     },
                     "time_sec": time_argument.clone(),
                     "toy": toy_argument.clone(),
+                    "device": device_argument.clone(),
                 },
                 "required": ["interval_ms", "strengths", "time_sec"],
                 "additionalProperties": false,
@@ -769,6 +1020,7 @@ fn tool_list() -> Value {
                     },
                     "time_sec": time_argument,
                     "toy": toy_argument,
+                    "device": device_argument,
                 },
                 "required": ["name", "time_sec"],
                 "additionalProperties": false,
@@ -783,13 +1035,58 @@ fn tool_list() -> Value {
         },
         {
             "name": "lovense_stop",
-            "description": "Panic zero: stop every function on every toy, synchronously, \
-                and latch the master off so recovery is a fresh explicit arm. Always \
-                available — disarmed, unconfigured, mid-pattern — and never gated.",
-            "inputSchema": no_arguments,
+            "description": "Panic zero: stop every function on every device on both \
+                providers, synchronously, and latch the master off so recovery is a \
+                fresh explicit arm. Always available — disarmed, unconfigured, \
+                mid-pattern — and never gated.",
+            "inputSchema": no_arguments.clone(),
             "annotations": {
                 "title": "Lovense stop",
                 "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": true,
+            },
+        },
+        {
+            "name": "ache_devices",
+            "description": "Discover every device across both providers (Lovense \
+                Standard API and embedded Buttplug), in one unified model: id, \
+                provider, name, battery, and capabilities as data — each capability \
+                carries its maximum on the unified 0..=20 strength scale, or null \
+                when the capability is reported but not mapped. A provider that \
+                cannot enumerate reports its typed error in its entry; the call \
+                fails only when no provider could enumerate. Discovery is safe \
+                while disarmed and arms nothing.",
+            "inputSchema": no_arguments.clone(),
+            "annotations": {
+                "title": "All devices (unified)",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": true,
+            },
+        },
+        {
+            "name": "ache_device",
+            "description": "One device by its unified id (from ache_devices), with \
+                its full capability list as data. A device no provider can see is a \
+                typed device_not_found; a provider that cannot enumerate surfaces \
+                its own typed error rather than a claimed absence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "Unified device id, e.g. \"buttplug:0\" or \"lovense:<toy id>\"."
+                    }
+                },
+                "required": ["device"],
+                "additionalProperties": false,
+            },
+            "annotations": {
+                "title": "One device (unified)",
+                "readOnlyHint": true,
                 "destructiveHint": false,
                 "idempotentHint": true,
                 "openWorldHint": true,
@@ -986,13 +1283,13 @@ mod tests {
         assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
         assert_eq!(
             response["result"]["serverInfo"],
-            json!({"name": "lovense", "version": "0.2.0"})
+            json!({"name": "ache", "version": "0.3.0"})
         );
         assert_eq!(response["result"]["capabilities"], json!({"tools": {}}));
     }
 
     #[test]
-    fn tools_list_is_exactly_the_eight_tools_with_full_schemas() {
+    fn tools_list_is_exactly_the_ten_tools_with_full_schemas() {
         let response = request(
             &server_for(Config::default()),
             r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#,
@@ -1011,7 +1308,7 @@ mod tests {
             let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap();
             let expected = matches!(
                 tool["name"].as_str().unwrap(),
-                "lovense_status" | "lovense_toys"
+                "lovense_status" | "lovense_toys" | "ache_devices" | "ache_device"
             );
             assert_eq!(read_only, expected, "{}", tool["name"]);
         }
@@ -1047,7 +1344,7 @@ mod tests {
         assert_eq!(status["session_health"], "ok");
         assert_eq!(status["intensity_ceiling"], 20);
         assert_eq!(status["watchdog_secs"], 5);
-        assert_eq!(status["server"]["version"], "0.2.0");
+        assert_eq!(status["server"]["version"], "0.3.0");
         assert!(!status.to_string().contains("connected"));
     }
 
@@ -1797,14 +2094,18 @@ mod tests {
     fn s2_wire_bodies_are_constructed_only_in_the_gate() {
         // The architectural invariant behind the safety contract: the
         // gate module (decide.rs) is the only production code that
-        // builds wire command bodies. Server and transport move bodies;
-        // they never make one.
+        // builds wire command bodies. Server, transport, and both
+        // providers move gate plans; they never make a body. (The
+        // unified era keeps the invariant and widens its sweep to the
+        // provider modules.)
         let sources = [
             include_str!("server.rs"),
             include_str!("transport.rs"),
             include_str!("main.rs"),
             include_str!("config.rs"),
             include_str!("state.rs"),
+            include_str!("provider.rs"),
+            include_str!("provider_buttplug.rs"),
         ];
         for source in sources {
             let production = source.split("#[cfg(test)]").next().unwrap();
@@ -1817,5 +2118,418 @@ mod tests {
         let gate_production = gate.split("#[cfg(test)]").next().unwrap();
         assert!(gate_production.contains("\"apiVer\": 1"));
         assert!(gate_production.contains("\"apiVer\": 2"));
+    }
+
+    // --- unified surface (ache) ---------------------------------------
+    //
+    // The merge battery: the Lovense mock and the Buttplug fixture
+    // behind one server. New tests split validation / adversarial like
+    // the rest of the suite.
+
+    use std::sync::Arc;
+
+    use crate::provider::FakeButtplug;
+
+    /// A unified server plus the fixture provider's logs and flags:
+    /// executed plans, zero count, pattern-cancelled, fail switch.
+    type UnifiedServer = (
+        Server,
+        Arc<Mutex<Vec<AllowedOutput>>>,
+        Arc<Mutex<u32>>,
+        Arc<Mutex<bool>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    );
+
+    fn unified() -> UnifiedServer {
+        let fake = FakeButtplug::new();
+        let executed = fake.executed_log();
+        let zeros = fake.zero_log();
+        let cancelled = fake.pattern_cancelled_flag();
+        let fail = fake.fail_flag();
+        let server = Server::new(Config::default(), Some(Box::new(MockTransport::new())))
+            .with_buttplug(Box::new(fake));
+        (server, executed, zeros, cancelled, fail)
+    }
+
+    fn unified_with_mock() -> (Server, Arc<Mutex<Vec<Value>>>) {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let server = Server::new(Config::default(), Some(Box::new(mock)))
+            .with_buttplug(Box::new(FakeButtplug::new()));
+        (server, sent)
+    }
+
+    // --- validation (unified) -----------------------------------------
+
+    #[test]
+    fn unified_discovery_merges_both_providers() {
+        let (server, ..) = unified();
+        let (devices, is_error) = payload(&call(&server, "ache_devices", json!({})));
+        assert!(!is_error);
+        assert_eq!(devices["count"], 4);
+        assert_eq!(devices["providers"]["lovense"]["count"], 2);
+        assert_eq!(devices["providers"]["buttplug"]["count"], 2);
+        let vibrator = &devices["devices"][2];
+        assert_eq!(vibrator["id"], "buttplug:0");
+        assert_eq!(vibrator["provider"], "buttplug");
+        assert_eq!(vibrator["capability_source"], "fixture");
+        assert_eq!(vibrator["capabilities"][0]["feature"], "Vibrate");
+        assert_eq!(vibrator["capabilities"][0]["max"], 20);
+        assert_eq!(vibrator["capabilities"][0]["steps"], 20);
+    }
+
+    #[test]
+    fn unified_device_query_returns_capabilities_as_data() {
+        let (server, ..) = unified();
+        let (device, is_error) = payload(&call(
+            &server,
+            "ache_device",
+            json!({"device": "buttplug:1"}),
+        ));
+        assert!(!is_error);
+        assert_eq!(device["name"], "Fixture Duo");
+        assert_eq!(device["battery"], 63);
+        let features: Vec<&str> = device["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|cap| cap["feature"].as_str().unwrap())
+            .collect();
+        assert_eq!(features, ["Vibrate", "Rotate"]);
+        let (device, _) = payload(&call(
+            &server,
+            "ache_device",
+            json!({"device": "lovense:mock-toy-1"}),
+        ));
+        assert_eq!(device["provider"], "lovense");
+        assert_eq!(device["capability_source"], "reported");
+    }
+
+    #[test]
+    fn gated_function_on_a_buttplug_device_executes_the_plan() {
+        let (server, executed, ..) = unified();
+        arm(&server);
+        let args =
+            json!({"feature": "Rotate", "strength": 7, "time_sec": 5, "device": "buttplug:1"});
+        let (ran, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(!is_error);
+        assert_eq!(ran["provider"], "buttplug");
+        assert_eq!(ran["device"], "buttplug:1");
+        assert_eq!(ran["effective"]["strength"], 7);
+        let executed = executed.lock().unwrap();
+        assert_eq!(executed.len(), 1);
+        match &executed[0] {
+            AllowedOutput::Function {
+                feature,
+                strength,
+                toy,
+                ..
+            } => {
+                assert_eq!(feature, "Rotate");
+                assert_eq!(*strength, 7);
+                assert_eq!(toy, "buttplug:1");
+            }
+            other => panic!("expected a function plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pattern_on_a_buttplug_device_executes_the_clamped_plan() {
+        let (server, executed, ..) = unified();
+        arm(&server);
+        let args = json!({"features": "v", "interval_ms": 500, "strengths": [30, 5], "time_sec": 4, "device": "buttplug:0"});
+        let (ran, is_error) = payload(&call(&server, "lovense_pattern", args));
+        assert!(!is_error);
+        assert_eq!(ran["gate"]["clamped"], true);
+        assert_eq!(ran["effective"]["strengths"], json!([20, 5]));
+        let executed = executed.lock().unwrap();
+        match &executed[0] {
+            AllowedOutput::Pattern { strengths, .. } => {
+                assert_eq!(
+                    strengths,
+                    &vec![20, 5],
+                    "the plan carries clamped values only"
+                );
+            }
+            other => panic!("expected a pattern plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_reports_both_providers() {
+        let (server, ..) = unified();
+        let status = status_of(&server);
+        assert_eq!(status["providers"]["lovense"]["state"], "mock");
+        assert_eq!(status["providers"]["buttplug"]["state"], "mock");
+        assert_eq!(status["providers"]["buttplug"]["available"], true);
+    }
+
+    #[test]
+    fn unified_lovense_device_routes_onto_the_legacy_wire() {
+        let (server, sent) = unified_with_mock();
+        arm(&server);
+        let args = json!({"feature": "Vibrate", "strength": 3, "time_sec": 2, "device": "lovense:mock-toy-2"});
+        let (ran, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(!is_error);
+        assert_eq!(ran["provider"], "lovense");
+        assert_eq!(
+            ran["command"]["toy"], "mock-toy-2",
+            "the wire sees the raw toy id"
+        );
+        assert_eq!(ran["command"]["action"], "Vibrate:3");
+        assert_eq!(sent.lock().unwrap().len(), 1);
+    }
+
+    // --- adversarial (unified) ----------------------------------------
+
+    #[test]
+    fn cross_provider_refusal_parity() {
+        // The merge's core safety obligation: an intent the contract
+        // refuses on the Lovense path is refused, with the same code,
+        // on the Buttplug path — because both go through the one gate.
+        let (server, executed, ..) = unified();
+        let battery: Vec<(Value, &str)> = vec![
+            // (output-tool arguments, expected code while DISARMED)
+            (function_args(5), "not_armed"),
+        ];
+        for (args, code) in &battery {
+            let (legacy, _) = payload(&call(&server, "lovense_function", args.clone()));
+            let mut unified_args = args.clone();
+            unified_args["device"] = json!("buttplug:1");
+            let (unified, _) = payload(&call(&server, "lovense_function", unified_args));
+            assert_eq!(legacy["error"]["code"], *code);
+            assert_eq!(unified["error"]["code"], *code, "parity for {args}");
+        }
+        arm(&server);
+        // Armed refusals: same malformed intents, both paths.
+        let denied: Vec<Value> = vec![
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 0}),
+            json!({"feature": "Vibrate", "strength": -1, "time_sec": 5}),
+            json!({"feature": "Explode", "strength": 5, "time_sec": 5}),
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 3601}),
+        ];
+        for args in denied {
+            let (legacy, _) = payload(&call(&server, "lovense_function", args.clone()));
+            let mut unified_args = args.clone();
+            unified_args["device"] = json!("buttplug:1");
+            let (unified, _) = payload(&call(&server, "lovense_function", unified_args));
+            assert_eq!(
+                legacy["error"]["code"], unified["error"]["code"],
+                "refusal parity for {args}"
+            );
+            assert_eq!(legacy["error"]["code"], "request_invalid");
+        }
+        // Pattern refusals: interval floor and strength count, both paths.
+        for args in [
+            json!({"features": "v", "interval_ms": 100, "strengths": [5], "time_sec": 5}),
+            json!({"features": "v", "interval_ms": 500, "strengths": vec![1_i64; 51], "time_sec": 5}),
+        ] {
+            let (legacy, _) = payload(&call(&server, "lovense_pattern", args.clone()));
+            let mut unified_args = args.clone();
+            unified_args["device"] = json!("buttplug:1");
+            let (unified, _) = payload(&call(&server, "lovense_pattern", unified_args));
+            assert_eq!(legacy["error"]["code"], "request_invalid");
+            assert_eq!(unified["error"]["code"], "request_invalid");
+        }
+        // Clamping parity: 25 becomes the same effective 20 on both.
+        let (legacy, _) = payload(&call(&server, "lovense_function", function_args(25)));
+        let (unified, _) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 25, "time_sec": 5, "device": "buttplug:1"}),
+        ));
+        assert_eq!(legacy["effective"]["strength"], 20);
+        assert_eq!(unified["effective"]["strength"], 20);
+        // Only the two allowed calls ever executed anywhere.
+        assert_eq!(executed.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn preset_on_a_buttplug_device_is_refused_and_executes_nothing() {
+        let (server, executed, ..) = unified();
+        arm(&server);
+        let args = json!({"name": "pulse", "time_sec": 5, "device": "buttplug:0"});
+        let (error, is_error) = payload(&call(&server, "lovense_preset", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "capability_unsupported");
+        assert_eq!(error["error"]["class"], "target");
+        assert!(executed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn no_provider_available_is_typed_never_a_fake_success() {
+        // Lovense: real transport, no host, no transport at all.
+        // Buttplug: inert (start failure / not wired).
+        let server =
+            Server::new(real("", 20010), None).with_buttplug(Box::new(InertProvider::unavailable(
+                ProviderId::Buttplug,
+                "embedded buttplug failed to start: no bluetooth",
+            )));
+        let (error, is_error) = payload(&call(&server, "ache_devices", json!({})));
+        assert!(is_error, "no provider could enumerate: the call must fail");
+        assert_eq!(error["error"]["code"], "target_unconfigured");
+        let (error, is_error) = payload(&call(
+            &server,
+            "ache_device",
+            json!({"device": "buttplug:0"}),
+        ));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "provider_unavailable");
+        let (error, is_error) = payload(&call(&server, "lovense_arm", json!({})));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unconfigured");
+        let (error, is_error) = payload(&call(&server, "lovense_function", function_args(5)));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unconfigured");
+    }
+
+    #[test]
+    fn unknown_and_malformed_device_ids_are_refused() {
+        let (server, executed, ..) = unified();
+        arm(&server);
+        let (error, is_error) = payload(&call(
+            &server,
+            "ache_device",
+            json!({"device": "buttplug:99"}),
+        ));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "device_not_found");
+        let (error, is_error) = payload(&call(&server, "ache_device", json!({"device": "wat:1"})));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "request_invalid");
+        let args =
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5, "device": "buttplug:99"});
+        let (error, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "device_not_found");
+        assert!(
+            executed.lock().unwrap().is_empty(),
+            "a refused route executes nothing"
+        );
+    }
+
+    #[test]
+    fn stop_zeroes_both_providers_and_cancels_the_pattern() {
+        let (server, _e, zeros, cancelled, _f) = unified();
+        arm(&server);
+        let args = json!({"features": "v", "interval_ms": 400, "strengths": [10, 10], "time_sec": 30, "device": "buttplug:1"});
+        payload(&call(&server, "lovense_pattern", args));
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        assert_eq!(stopped["stop_sent"], true);
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the buttplug provider was zeroed"
+        );
+        assert!(
+            *cancelled.lock().unwrap(),
+            "the running pattern was cancelled by the zero"
+        );
+        assert_eq!(status_of(&server)["armed"], false);
+    }
+
+    #[test]
+    fn buttplug_execute_failure_is_a_session_drop() {
+        let (server, _e, _z, _c, fail) = unified();
+        arm(&server);
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let args =
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5, "device": "buttplug:0"});
+        let (error, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unreachable");
+        let status = status_of(&server);
+        assert_eq!(status["output_active"], false, "a drop zeroes output");
+        assert_eq!(status["armed"], false, "a drop latches the master off");
+        assert_eq!(status["session_health"], "degraded");
+        // Nothing resumes when the provider recovers: re-arm first.
+        fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        let args =
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5, "device": "buttplug:0"});
+        let (error, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "not_armed");
+    }
+
+    #[test]
+    fn watchdog_trip_zeroes_the_buttplug_provider_too() {
+        let (server, _e, zeros, _c, _f) = unified();
+        arm(&server);
+        let args =
+            json!({"feature": "Vibrate", "strength": 8, "time_sec": 30, "device": "buttplug:0"});
+        payload(&call(&server, "lovense_function", args));
+        server.lock_state().backdate_activity(6);
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["armed"], false);
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the trip zeroes every provider, not just the Lovense wire"
+        );
+    }
+
+    #[test]
+    fn stop_attempts_both_providers_even_when_one_zero_fails() {
+        // The Lovense send is failing (injected drop). A stop that
+        // short-circuited on that failure would leave a Buttplug
+        // device running — the zero must be attempted everywhere.
+        let mock = MockTransport::new();
+        let fail = mock.fail_flag();
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let server =
+            Server::new(Config::default(), Some(Box::new(mock))).with_buttplug(Box::new(fake));
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let (error, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unreachable");
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the buttplug provider was zeroed despite the lovense failure"
+        );
+        assert_eq!(status_of(&server)["armed"], false);
+    }
+
+    #[test]
+    fn watchdog_zero_attempts_both_providers_when_one_fails() {
+        // Same obligation on the best-effort path: the watchdog's
+        // zero must reach the Buttplug provider even though the
+        // Lovense zero is failing.
+        let mock = MockTransport::new();
+        let fail = mock.fail_flag();
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let server =
+            Server::new(Config::default(), Some(Box::new(mock))).with_buttplug(Box::new(fake));
+        arm(&server);
+        let args =
+            json!({"feature": "Vibrate", "strength": 8, "time_sec": 30, "device": "buttplug:0"});
+        payload(&call(&server, "lovense_function", args));
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.lock_state().backdate_activity(6);
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the trip attempted the buttplug zero despite the lovense failure"
+        );
+    }
+
+    #[test]
+    fn unified_route_applies_reported_lovense_caps_legacy_route_unchanged() {
+        // The mock Lush reports Vibrate only. Through the unified
+        // route the gate refuses Rotate against the toy's own reported
+        // capabilities; through the legacy toy selector the historical
+        // behavior stands (the app arbitrates, as it always has).
+        let (server, sent) = unified_with_mock();
+        arm(&server);
+        let args = json!({"feature": "Rotate", "strength": 3, "time_sec": 2, "device": "lovense:mock-toy-1"});
+        let (error, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "capability_unsupported");
+        let args = json!({"feature": "Rotate", "strength": 3, "time_sec": 2, "toy": "mock-toy-1"});
+        let (_, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(!is_error, "the legacy path keeps its historical reach");
+        assert_eq!(sent.lock().unwrap().len(), 1);
     }
 }

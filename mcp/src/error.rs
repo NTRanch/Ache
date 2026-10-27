@@ -20,6 +20,17 @@ pub enum ErrorCode {
     AppError,
     NotArmed,
     RequestInvalid,
+    /// A named provider (Lovense or Buttplug) cannot serve at all in
+    /// this process: disabled, not wired, or its embedded stack failed
+    /// to start. Distinct from a configured target that merely has no
+    /// device attached right now.
+    ProviderUnavailable,
+    /// The target device exists but does not offer the requested
+    /// capability (a feature it lacks, or a Lovense-only preset aimed
+    /// at a Buttplug device). The gate refuses; nothing is sent.
+    CapabilityUnsupported,
+    /// A unified device id names no device any provider can see.
+    DeviceNotFound,
 }
 
 impl ErrorCode {
@@ -34,6 +45,9 @@ impl ErrorCode {
             ErrorCode::AppError => "app_error",
             ErrorCode::NotArmed => "not_armed",
             ErrorCode::RequestInvalid => "request_invalid",
+            ErrorCode::ProviderUnavailable => "provider_unavailable",
+            ErrorCode::CapabilityUnsupported => "capability_unsupported",
+            ErrorCode::DeviceNotFound => "device_not_found",
         }
     }
 
@@ -42,10 +56,13 @@ impl ErrorCode {
             ErrorCode::ConfigMissing | ErrorCode::ConfigUnreadable | ErrorCode::ConfigInvalid => {
                 "configuration"
             }
-            ErrorCode::TargetUnconfigured => "target",
-            ErrorCode::TargetUnreachable | ErrorCode::ResponseInvalid | ErrorCode::AppError => {
-                "transport"
-            }
+            ErrorCode::TargetUnconfigured
+            | ErrorCode::CapabilityUnsupported
+            | ErrorCode::DeviceNotFound => "target",
+            ErrorCode::TargetUnreachable
+            | ErrorCode::ResponseInvalid
+            | ErrorCode::AppError
+            | ErrorCode::ProviderUnavailable => "transport",
             ErrorCode::NotArmed => "safety",
             ErrorCode::RequestInvalid => "request",
         }
@@ -53,16 +70,16 @@ impl ErrorCode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LovenseError {
+pub struct AcheError {
     pub code: ErrorCode,
     pub message: String,
 }
 
-pub type Result<T> = std::result::Result<T, LovenseError>;
+pub type Result<T> = std::result::Result<T, AcheError>;
 
-impl LovenseError {
-    pub fn new(code: ErrorCode, message: impl Into<String>) -> LovenseError {
-        LovenseError {
+impl AcheError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> AcheError {
+        AcheError {
             code,
             message: truncate(message.into()),
         }
@@ -79,16 +96,16 @@ impl LovenseError {
     }
 }
 
-impl fmt::Display for LovenseError {
+impl fmt::Display for AcheError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}: {}", self.code.as_str(), self.message)
     }
 }
 
-impl std::error::Error for LovenseError {}
+impl std::error::Error for AcheError {}
 
 pub fn err<T>(code: ErrorCode, message: impl Into<String>) -> Result<T> {
-    Err(LovenseError::new(code, message))
+    Err(AcheError::new(code, message))
 }
 
 /// Bound a message to `ERROR_MESSAGE_BYTES_MAX` bytes on a char boundary.
@@ -111,7 +128,7 @@ mod tests {
 
     #[test]
     fn long_messages_are_truncated_on_a_char_boundary() {
-        let error = LovenseError::new(ErrorCode::ResponseInvalid, "é".repeat(4096));
+        let error = AcheError::new(ErrorCode::ResponseInvalid, "é".repeat(4096));
         assert!(error.message.len() <= ERROR_MESSAGE_BYTES_MAX + '…'.len_utf8());
         assert!(error.message.ends_with('…'));
     }

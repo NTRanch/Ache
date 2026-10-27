@@ -123,13 +123,35 @@ one full mock session) before any stage is called done.
   go, with the Owner present at the machine. This folds in the
   previously tabled live rung as this server's acceptance.
 
+## Amendment — 2026-10-27, Owner-commissioned: the unification
+
+The Owner commissioned merging this server and Buttplug.io support
+into ONE unified haptics MCP server, renamed **ache**. This amendment
+supersedes two things in this brief:
+
+- **"Buttplug transport" (out of scope for v1) is superseded.** The
+  unified server carries two providers behind one seam — Lovense
+  (this brief's server, behavior unchanged) and Buttplug (embedded
+  in-process; no Intiface instance) — behind one tool surface, with
+  this brief's safety contract enforced unchanged across both.
+- **Distribution naming.** The server is `ache` from v0.3.0; the
+  GitHub repository rename (`NTRanch/Lovense` → `NTRanch/ache`) is
+  staged as a landing decision, not yet executed.
+
+Everything else in this brief stands — in particular the S4 live rung
+remains separately gated on the Owner's go + presence, and now
+covers both providers' hardware. The merge's build report lives with
+the commissioning work (`lovense-merge-20261027/REPORT.md` in the
+estate workspace).
+
 ## Out of scope for v1
 
 - The cloud/server Standard API route (rejected posture stands).
 - The App Gallery platform API (Phase 4 of the home checklist;
   a separate product decision).
 - Buttplug transport (revisit only if a target toy lacks
-  Standard API support).
+  Standard API support). **[Superseded 2026-10-27 — see the
+  amendment above.]**
 - Any presence in the ai.qompass registry or on qompass.ai:
   this is an NTRanch-lane artifact, distributed from the
   NTRanch/Lovense GitHub repo.

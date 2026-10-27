@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Scripted stdio smoke for lovense-mcp over the mock transport: one
+# Scripted stdio smoke for ache over the mock transport: one
 # full session — discovery, a denied output while disarmed, arm, an
 # over-ceiling function (clamped on the wire), pattern, preset, stop.
-# Usage: scripts/stdio-smoke.sh <path-to-lovense-mcp>
+# Usage: scripts/stdio-smoke.sh <path-to-ache>
 # Prints the request/response transcript; exits non-zero on any failed check.
 # A manual convenience: the gated smoke is `cargo test --test stdio_smoke`,
 # which writes its transcript to target/tmp/stdio-smoke.txt.
 set -euo pipefail
 
-binary="${1:?usage: stdio-smoke.sh <path-to-lovense-mcp>}"
+binary="${1:?usage: stdio-smoke.sh <path-to-ache>}"
 
 requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
@@ -24,7 +24,7 @@ requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersi
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"lovense_status","arguments":{}}}'
 
 # Mock transport: run with no config file.
-responses="$(printf '%s\n' "$requests" | env -u LOVENSE_MCP_CONFIG "$binary")"
+responses="$(printf '%s\n' "$requests" | env -u ACHE_MCP_CONFIG "$binary")"
 
 echo "== requests"
 printf '%s\n' "$requests"
@@ -37,10 +37,11 @@ lines = [json.loads(line) for line in sys.argv[1].splitlines()]
 assert [m["id"] for m in lines] == list(range(1, 12)), "one response per request, none for the notification"
 init = lines[0]["result"]
 assert init["protocolVersion"] == "2024-11-05"
-assert init["serverInfo"] == {"name": "lovense", "version": "0.2.0"}
+assert init["serverInfo"] == {"name": "ache", "version": "0.3.0"}
 names = [tool["name"] for tool in lines[1]["result"]["tools"]]
 assert names == ["lovense_status", "lovense_toys", "lovense_arm", "lovense_disarm",
-                 "lovense_function", "lovense_pattern", "lovense_preset", "lovense_stop"], names
+                 "lovense_function", "lovense_pattern", "lovense_preset", "lovense_stop",
+                 "ache_devices", "ache_device"], names
 
 def payload(line):
     result = line["result"]
@@ -65,5 +66,5 @@ stopped, err = payload(lines[9])
 assert err is False and stopped["stop_sent"] is True, stopped
 final, err = payload(lines[10])
 assert err is False and final["armed"] is False and final["output_active"] is False, final
-print("== smoke: PASS (8 tools; disarmed denied; arm; 25 clamped to 20; pattern; preset; stop; final state safe)")
+print("== smoke: PASS (10 tools; disarmed denied; arm; 25 clamped to 20; pattern; preset; stop; final state safe)")
 EOF

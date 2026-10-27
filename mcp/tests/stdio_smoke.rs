@@ -8,16 +8,16 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
 
-const SERVER: &str = env!("CARGO_BIN_EXE_lovense-mcp");
+const SERVER: &str = env!("CARGO_BIN_EXE_ache");
 
 /// Run the server with `config` (None = no config file), feed `input`,
 /// and collect everything it printed.
 fn run(config: Option<&str>, input: &str) -> Output {
     let mut command = Command::new(SERVER);
-    command.env_remove("LOVENSE_MCP_CONFIG");
+    command.env_remove("ACHE_MCP_CONFIG");
     if let Some(text) = config {
         let path = config_file(text);
-        command.env("LOVENSE_MCP_CONFIG", path);
+        command.env("ACHE_MCP_CONFIG", path);
     }
     let mut child = command
         .stdin(Stdio::piped())
@@ -88,8 +88,8 @@ fn stdio_smoke_over_mock_transport() {
         "one response per request, none for the notification"
     );
     assert_eq!(lines[0]["result"]["protocolVersion"], "2024-11-05");
-    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "lovense");
-    assert_eq!(lines[0]["result"]["serverInfo"]["version"], "0.2.0");
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "ache");
+    assert_eq!(lines[0]["result"]["serverInfo"]["version"], "0.3.0");
     let names: Vec<&str> = lines[1]["result"]["tools"]
         .as_array()
         .unwrap()
@@ -107,6 +107,8 @@ fn stdio_smoke_over_mock_transport() {
             "lovense_pattern",
             "lovense_preset",
             "lovense_stop",
+            "ache_devices",
+            "ache_device",
         ]
     );
     // Status: mock, disarmed, nothing active.
@@ -131,8 +133,8 @@ fn stdio_smoke_over_mock_transport() {
     assert_eq!(tool_text(&lines[10])["output_active"], false);
 
     let transcript = format!(
-        "== stdio smoke: lovense-mcp, mock transport, no config file\n== requests\n{SMOKE}\
-         == responses\n{}== stderr\n{}== result: PASS (initialize; tools/list = the eight \
+        "== stdio smoke: ache, mock transport, no config file\n== requests\n{SMOKE}\
+         == responses\n{}== stderr\n{}== result: PASS (initialize; tools/list = the ten \
          tools; status mock/disarmed; disarmed function denied not_armed; arm; function \
          25 clamped to 20; pattern; preset; stop; final status disarmed and inactive)\n",
         String::from_utf8_lossy(&output.stdout),
@@ -140,6 +142,72 @@ fn stdio_smoke_over_mock_transport() {
     );
     let evidence = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("stdio-smoke.txt");
     std::fs::write(evidence, transcript).expect("write smoke evidence");
+}
+
+/// The unified surface over the binary: mock mode wires the fixture
+/// Buttplug provider, so one session discovers both providers'
+/// devices, queries capabilities, runs a clamped function on a
+/// Buttplug device through the same gate, and stops.
+#[test]
+fn stdio_unified_surface_over_mock_and_fixture() {
+    let input = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ache_devices","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ache_device","arguments":{"device":"buttplug:1"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lovense_arm","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lovense_function","arguments":{"feature":"Vibrate","strength":25,"time_sec":5,"device":"buttplug:0"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lovense_function","arguments":{"feature":"Rotate","strength":5,"time_sec":5,"device":"buttplug:0"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"lovense_stop","arguments":{}}}
+"#;
+    let output = run(None, input);
+    assert!(output.status.success());
+    let lines = responses(&output);
+    assert_eq!(lines.len(), 6);
+    // Unified discovery: two Lovense fixture toys + two Buttplug
+    // fixture devices, each provider accounted for.
+    let devices = tool_text(&lines[0]);
+    assert_eq!(devices["count"], 4);
+    assert_eq!(devices["providers"]["lovense"]["count"], 2);
+    assert_eq!(devices["providers"]["buttplug"]["count"], 2);
+    let ids: Vec<&str> = devices["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|device| device["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "lovense:mock-toy-1",
+            "lovense:mock-toy-2",
+            "buttplug:0",
+            "buttplug:1"
+        ]
+    );
+    // Capability query: the Duo reports Vibrate + Rotate as data.
+    let duo = tool_text(&lines[1]);
+    assert_eq!(duo["name"], "Fixture Duo");
+    let features: Vec<&str> = duo["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cap| cap["feature"].as_str().unwrap())
+        .collect();
+    assert_eq!(features, ["Vibrate", "Rotate"]);
+    // A function on the Buttplug device passes the same gate: 25
+    // clamps to the ceiling of 20 and the result says so.
+    let ran = tool_text(&lines[3]);
+    assert_eq!(lines[3]["result"]["isError"], false);
+    assert_eq!(ran["provider"], "buttplug");
+    assert_eq!(ran["gate"]["clamped"], true);
+    assert_eq!(ran["effective"]["strength"], 20);
+    // Rotate on the vibrate-only fixture is refused by the gate
+    // against the device's own capabilities; nothing is executed.
+    assert_eq!(lines[4]["result"]["isError"], true);
+    assert_eq!(
+        tool_text(&lines[4])["error"]["code"],
+        "capability_unsupported"
+    );
+    // Stop zeroes both providers.
+    assert_eq!(tool_text(&lines[5])["stop_sent"], true);
 }
 
 #[test]
@@ -183,7 +251,7 @@ fn invalid_configs_exit_2_with_structured_error_and_no_panic() {
 #[test]
 fn missing_config_file_exits_2() {
     let output = Command::new(SERVER)
-        .env("LOVENSE_MCP_CONFIG", "/nonexistent/lovense-mcp.toml")
+        .env("ACHE_MCP_CONFIG", "/nonexistent/lovense-mcp.toml")
         .stdin(Stdio::null())
         .output()
         .expect("spawn server");

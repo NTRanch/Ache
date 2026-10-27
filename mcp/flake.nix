@@ -1,5 +1,5 @@
 {
-  description = "lovense-mcp - Lovense Standard API (local Game Mode) MCP stdio server";
+  description = "ache - unified haptics MCP stdio server (Lovense Standard API + embedded Buttplug)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -15,7 +15,7 @@
     {
       packages = forAllSystems (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "lovense-mcp";
+          pname = "ache";
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
           # Only what the build and tests read.
           src = pkgs.lib.fileset.toSource {
@@ -28,9 +28,13 @@
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;
+          # The embedded Buttplug provider links the system D-Bus
+          # library (btleplug's bluez stack): pkg-config finds it.
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.dbus ];
           # The transport tests run a throwaway loopback HTTP stub.
           nativeCheckInputs = [ pkgs.python3 ];
-          meta.mainProgram = "lovense-mcp";
+          meta.mainProgram = "ache";
         };
       });
 
@@ -43,6 +47,8 @@
             pkgs.clippy
             pkgs.rust-analyzer
             pkgs.python3
+            pkgs.pkg-config
+            pkgs.dbus
           ];
         };
       });

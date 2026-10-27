@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="ache">
+  <defs>
+    <linearGradient id="ache-grad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff8fa3"/>
+      <stop offset="0.35" stop-color="#f43f5e"/>
+      <stop offset="0.7" stop-color="#c084fc"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <path d="M 28 164 C 78 136 118 192 168 164 C 218 136 258 192 308 164 C 358 136 398 192 448 164 C 498 136 538 192 588 164 C 638 136 678 192 728 164 C 778 136 818 192 868 164 L 904 164 L 922 104 L 946 218 L 963 134 L 978 164 C 1022 177 1068 153 1120 164"
+        fill="none" stroke="url(#ache-grad)" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" opacity="0.10"/>
+  <path d="M 28 164 C 78 136 118 192 168 164 C 218 136 258 192 308 164 C 358 136 398 192 448 164 C 498 136 538 192 588 164 C 638 136 678 192 728 164 C 778 136 818 192 868 164 L 904 164 L 922 104 L 946 218 L 963 134 L 978 164 C 1022 177 1068 153 1120 164"
+        fill="none" stroke="url(#ache-grad)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 1120 164 C 1145 170 1162 158 1180 164"
+        fill="none" stroke="#7c3aed" stroke-width="7" stroke-linecap="round" opacity="0.4"/>
+  <text x="600" y="215" text-anchor="middle"
+        font-family="Nunito, Comfortaa, Quicksand, 'Arial Rounded MT Bold', sans-serif"
+        font-size="205" font-weight="800" letter-spacing="1"
+        fill="url(#ache-grad)">ache</text>
+</svg>

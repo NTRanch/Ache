@@ -1,15 +1,30 @@
 [package]
-name = "lovense-mcp"
-version = "0.2.0"
+name = "ache"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Lovense MCP stdio server (stage S2: read core plus the decide()-gated output core)"
+description = "ache — unified haptics MCP stdio server: Lovense Standard API and embedded Buttplug.io behind one tool surface, every output through the pure decide() safety gate"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# The Buttplug provider: an embedded, in-process Buttplug server (no
+# Intiface instance needed). Only the BLE and serial hardware managers
+# are wired in the provider; the websocket-server manager is
+# deliberately excluded (it would open a listening socket), as are the
+# Lovense dongle/connect managers (the Lovense provider already covers
+# Lovense hardware through the Standard API).
+buttplug_client = "11"
+buttplug_client_in_process = { version = "12", default-features = false, features = ["tokio-runtime"] }
+buttplug_core = "11"
+buttplug_server = "12"
+buttplug_server_device_config = "12"
+buttplug_server_hwmgr_btleplug = "12"
+buttplug_server_hwmgr_serial = "12"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+futures = "0.3"
 
 [profile.release]
 overflow-checks = true

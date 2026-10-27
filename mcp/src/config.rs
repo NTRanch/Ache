@@ -12,7 +12,13 @@ use serde::Deserialize;
 use crate::error::{ErrorCode, Result, err};
 
 /// Environment variable naming the config file. Unset means defaults.
-pub const CONFIG_ENV: &str = "LOVENSE_MCP_CONFIG";
+/// (Renamed from `LOVENSE_MCP_CONFIG` in the ache unification; the old
+/// name is no longer read — see the merge report's breaking changes.)
+pub const CONFIG_ENV: &str = "ACHE_MCP_CONFIG";
+/// Default device-scan window for the Buttplug provider, milliseconds.
+pub const BUTTPLUG_SCAN_MS_DEFAULT: u32 = 1500;
+pub const BUTTPLUG_SCAN_MS_MIN: u32 = 100;
+pub const BUTTPLUG_SCAN_MS_MAX: u32 = 10_000;
 /// Largest config file accepted, in bytes.
 pub const CONFIG_BYTES_MAX: u64 = 64 * 1024;
 /// Highest intensity the Lovense API accepts; also the default ceiling.
@@ -50,6 +56,11 @@ pub struct Config {
     pub use_https: bool,
     pub intensity_ceiling: u8,
     pub watchdog_secs: u8,
+    /// Whether the embedded Buttplug provider runs at all. Default on:
+    /// the unified server serves both providers unless told otherwise.
+    pub buttplug_enabled: bool,
+    /// How long one Buttplug discovery scan listens, in milliseconds.
+    pub buttplug_scan_ms: u32,
 }
 
 impl Default for Config {
@@ -61,6 +72,8 @@ impl Default for Config {
             use_https: false,
             intensity_ceiling: INTENSITY_CEILING_MAX,
             watchdog_secs: WATCHDOG_SECS_DEFAULT,
+            buttplug_enabled: true,
+            buttplug_scan_ms: BUTTPLUG_SCAN_MS_DEFAULT,
         }
     }
 }
@@ -76,12 +89,22 @@ struct RawConfig {
     use_https: Option<bool>,
     intensity_ceiling: Option<i64>,
     watchdog_secs: Option<i64>,
+    buttplug: Option<RawButtplug>,
+}
+
+/// The `[buttplug]` section: the embedded Buttplug provider's knobs.
+/// Same fail-closed discipline as the top level — unknown keys refuse.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawButtplug {
+    enabled: Option<bool>,
+    scan_ms: Option<i64>,
 }
 
 impl Config {
     pub fn from_toml_str(text: &str) -> Result<Config> {
         let raw: RawConfig = toml::from_str(text).map_err(|cause| {
-            crate::error::LovenseError::new(ErrorCode::ConfigInvalid, cause.to_string())
+            crate::error::AcheError::new(ErrorCode::ConfigInvalid, cause.to_string())
         })?;
         let defaults = Config::default();
         let transport = match raw.transport.as_deref() {
@@ -114,6 +137,29 @@ impl Config {
                 _ => return invalid("watchdog_secs", format!("{secs} is outside 1..=60")),
             },
         };
+        let (buttplug_enabled, buttplug_scan_ms) = match raw.buttplug {
+            None => (defaults.buttplug_enabled, defaults.buttplug_scan_ms),
+            Some(section) => {
+                let scan_ms = match section.scan_ms {
+                    None => defaults.buttplug_scan_ms,
+                    Some(ms) => match u32::try_from(ms) {
+                        Ok(ms) if (BUTTPLUG_SCAN_MS_MIN..=BUTTPLUG_SCAN_MS_MAX).contains(&ms) => ms,
+                        _ => {
+                            return invalid(
+                                "buttplug.scan_ms",
+                                format!(
+                                    "{ms} is outside {BUTTPLUG_SCAN_MS_MIN}..={BUTTPLUG_SCAN_MS_MAX}"
+                                ),
+                            );
+                        }
+                    },
+                };
+                (
+                    section.enabled.unwrap_or(defaults.buttplug_enabled),
+                    scan_ms,
+                )
+            }
+        };
         Ok(Config {
             transport,
             host,
@@ -121,6 +167,8 @@ impl Config {
             use_https: raw.use_https.unwrap_or(defaults.use_https),
             intensity_ceiling,
             watchdog_secs,
+            buttplug_enabled,
+            buttplug_scan_ms,
         })
     }
 
@@ -153,7 +201,7 @@ impl Config {
             );
         }
         let text = std::fs::read_to_string(path).map_err(|cause| {
-            crate::error::LovenseError::new(
+            crate::error::AcheError::new(
                 ErrorCode::ConfigUnreadable,
                 format!("config {}: {cause}", path.display()),
             )
@@ -193,7 +241,7 @@ fn invalid<T>(field: &str, reason: impl AsRef<str>) -> Result<T> {
 mod tests {
     use super::*;
 
-    fn refused(text: &str) -> crate::error::LovenseError {
+    fn refused(text: &str) -> crate::error::AcheError {
         match Config::from_toml_str(text) {
             Ok(config) => panic!("config was accepted: {config:?}"),
             Err(error) => error,
@@ -242,6 +290,18 @@ mod tests {
     fn dns_hostname_is_accepted() {
         let config = Config::from_toml_str("host = \"192-168-1-5.lovense.club\"").unwrap();
         assert_eq!(config.host, "192-168-1-5.lovense.club");
+    }
+
+    #[test]
+    fn buttplug_section_parses_and_defaults() {
+        let config = Config::from_toml_str("[buttplug]\nenabled = false\nscan_ms = 250\n").unwrap();
+        assert!(!config.buttplug_enabled);
+        assert_eq!(config.buttplug_scan_ms, 250);
+        let config = Config::from_toml_str("[buttplug]\n").unwrap();
+        assert!(config.buttplug_enabled);
+        assert_eq!(config.buttplug_scan_ms, BUTTPLUG_SCAN_MS_DEFAULT);
+        let config = Config::from_toml_str("").unwrap();
+        assert!(config.buttplug_enabled, "the provider is on by default");
     }
 
     #[test]
@@ -321,6 +381,28 @@ mod tests {
             assert!(refused(&text).message.contains("host"), "host {host:?}");
         }
         refused(&format!("host = \"{}\"", "a".repeat(254)));
+    }
+
+    #[test]
+    fn buttplug_section_is_fail_closed_too() {
+        // Unknown keys inside the section refuse, exactly like the top
+        // level — a stray credential-shaped key has nowhere to hide.
+        assert!(
+            refused("[buttplug]\ntoken = \"x\"")
+                .message
+                .contains("token")
+        );
+        assert!(
+            refused("[buttplug]\nscan_ms = 99")
+                .message
+                .contains("buttplug.scan_ms")
+        );
+        assert!(
+            refused("[buttplug]\nscan_ms = 10001")
+                .message
+                .contains("buttplug.scan_ms")
+        );
+        refused("[buttplug]\nenabled = \"yes\"");
     }
 
     #[test]

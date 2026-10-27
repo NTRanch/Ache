@@ -1,15 +1,24 @@
-# Lovense Integration — Nice Thoughts Ranch
+<p align="center">
+  <img src="docs/ache-header.png" alt="ache — unified haptics" width="720">
+</p>
 
-Working repository for Nice Thoughts Ranch's Lovense integration:
-the studio's presence in the Lovense App Gallery, toy integration
+# ache — unified haptics, by Nice Thoughts Ranch
+
+Home of **ache**, Nice Thoughts Ranch's unified haptics MCP
+server, and of the Lovense integration work around it: the
+studio's presence in the Lovense App Gallery, toy integration
 for STROBE, and media-sync research for future interactive media.
 
-This is a planning and integration repo. It contains no credentials
-and no production code yet. Code lands here only after the checklist
-gates below are passed.
+This is a planning and integration repo. It contains no credentials.
+Its production code is the MCP server in [`mcp/`](mcp/README.md) —
+**ache**, the unified haptics server (Lovense Standard API + embedded
+Buttplug behind one gated tool surface), built under the checklist
+gates below.
 
 ## Start here
 
+- [mcp/README.md](mcp/README.md): ache, the unified haptics MCP
+  server — its safety contract, tool surface, and configuration.
 - [CHECKLIST.md](CHECKLIST.md): the phased work list, account and
   console setup first, code last.
 - [TESTING.md](TESTING.md): the test ladder for the integration,

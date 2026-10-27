@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::{Config, TransportKind};
-use crate::error::{ErrorCode, LovenseError, Result, err};
+use crate::error::{AcheError, ErrorCode, Result, err};
 
 /// Whole-request deadline for one discovery call (the bridge's figure).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -23,7 +23,9 @@ pub const TOYS_MAX: usize = 64;
 /// Longest toy string field kept, in bytes.
 pub const TOY_FIELD_BYTES_MAX: usize = 128;
 /// Value of the required `X-platform` header.
-pub const PLATFORM_NAME: &str = "lovense-mcp";
+pub const PLATFORM_NAME: &str = "ache";
+/// Most function names kept from one toy's reported capability list.
+pub const FUNCTIONS_MAX: usize = 16;
 
 /// One toy as reported by discovery. Absent or unparseable fields stay
 /// `None` rather than being invented.
@@ -35,6 +37,11 @@ pub struct Toy {
     pub toy_type: Option<String>,
     /// Percent, 0..=100.
     pub battery: Option<u8>,
+    /// Function names the app reports for this toy (the GetToys
+    /// `fullFunctionNames` field), when it reports them. `None` means
+    /// not reported — capabilities are then the provider's full set,
+    /// labelled as such, never invented per-toy.
+    pub functions: Option<Vec<String>>,
 }
 
 /// A configured network target. Only constructible with a non-empty host,
@@ -88,9 +95,11 @@ pub trait OutputTransport {
 }
 
 /// The full transport: read and output over one configured target.
-pub trait Transport: ReadTransport + OutputTransport {}
+/// Send + Sync are part of the contract since the unification: a
+/// transport sits behind the provider seam, shared by reference.
+pub trait Transport: ReadTransport + OutputTransport + Send + Sync {}
 
-impl<T: ReadTransport + OutputTransport> Transport for T {}
+impl<T: ReadTransport + OutputTransport + Send + Sync> Transport for T {}
 
 /// The production transport for a config, or `None` when the config
 /// names the real transport but no host: then nothing can reach the wire.
@@ -162,12 +171,14 @@ impl MockTransport {
                 name: "Mock Lush".into(),
                 toy_type: Some("lush".into()),
                 battery: Some(87),
+                functions: Some(vec!["Vibrate".into()]),
             },
             Toy {
                 id: "mock-toy-2".into(),
                 name: "Mock Edge".into(),
                 toy_type: Some("edge".into()),
                 battery: Some(42),
+                functions: Some(vec!["Vibrate".into()]),
             },
         ]
     }
@@ -269,7 +280,7 @@ impl ReadTransport for RealTransport {
             .take(RESPONSE_BYTES_MAX + 1)
             .read_to_end(&mut body)
             .map_err(|cause| {
-                LovenseError::new(ErrorCode::TargetUnreachable, format!("{url}: {cause}"))
+                AcheError::new(ErrorCode::TargetUnreachable, format!("{url}: {cause}"))
             })?;
         if body.len() as u64 > RESPONSE_BYTES_MAX {
             return err(
@@ -305,7 +316,7 @@ impl OutputTransport for RealTransport {
             .take(RESPONSE_BYTES_MAX + 1)
             .read_to_end(&mut bytes)
             .map_err(|cause| {
-                LovenseError::new(ErrorCode::TargetUnreachable, format!("{url}: {cause}"))
+                AcheError::new(ErrorCode::TargetUnreachable, format!("{url}: {cause}"))
             })?;
         if bytes.len() as u64 > RESPONSE_BYTES_MAX {
             return err(
@@ -395,7 +406,29 @@ fn parse_toy(key: &str, value: &Value) -> Result<Toy> {
         battery: battery
             .filter(|percent| *percent <= 100)
             .map(|percent| percent as u8),
+        functions: parse_functions(value),
     })
+}
+
+/// The toy's reported function names, parsed defensively: the field is
+/// documented (TOYS.md) but its exact shape is the app's choice, so an
+/// array of names and a comma-joined string are both accepted, each
+/// name is bounded, and anything else reads as "not reported".
+fn parse_functions(value: &Value) -> Option<Vec<String>> {
+    let names: Vec<String> = match value.get("fullFunctionNames") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(bounded))
+            .collect(),
+        Some(Value::String(text)) => text.split(',').map(|part| bounded(part.trim())).collect(),
+        _ => return None,
+    };
+    let names: Vec<String> = names
+        .into_iter()
+        .filter(|name| !name.is_empty())
+        .take(FUNCTIONS_MAX)
+        .collect();
+    if names.is_empty() { None } else { Some(names) }
 }
 
 fn string_field(value: &Value, field: &str) -> Option<String> {
@@ -413,8 +446,8 @@ fn bounded(text: &str) -> String {
     text[..cut].to_string()
 }
 
-fn invalid_response(reason: impl Into<String>) -> LovenseError {
-    LovenseError::new(ErrorCode::ResponseInvalid, reason)
+fn invalid_response(reason: impl Into<String>) -> AcheError {
+    AcheError::new(ErrorCode::ResponseInvalid, reason)
 }
 
 #[cfg(test)]
@@ -476,8 +509,30 @@ mod tests {
                 name: "lush".into(),
                 toy_type: Some("lush".into()),
                 battery: Some(64),
+                functions: None,
             }]
         );
+    }
+
+    #[test]
+    fn reported_function_names_parse_in_both_shapes() {
+        let body =
+            r#"{"code":200,"data":{"toys":{"a":{"fullFunctionNames":["Vibrate","Rotate"]}}}}"#;
+        let toys = parse_get_toys(body.as_bytes()).unwrap();
+        assert_eq!(
+            toys[0].functions,
+            Some(vec!["Vibrate".to_string(), "Rotate".to_string()])
+        );
+        let body = r#"{"code":200,"data":{"toys":{"a":{"fullFunctionNames":"Vibrate, Pump"}}}}"#;
+        let toys = parse_get_toys(body.as_bytes()).unwrap();
+        assert_eq!(
+            toys[0].functions,
+            Some(vec!["Vibrate".to_string(), "Pump".to_string()])
+        );
+        // Unreported or malformed stays "not reported", never invented.
+        let body = r#"{"code":200,"data":{"toys":{"a":{"fullFunctionNames":7}}}}"#;
+        let toys = parse_get_toys(body.as_bytes()).unwrap();
+        assert_eq!(toys[0].functions, None);
     }
 
     #[test]
