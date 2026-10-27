@@ -9,8 +9,36 @@ lane rule, 2026-10-21).
 
 ## Why build — the landscape, verified 2026-10-21
 
-Lovense publishes **no official MCP server**. What exists is
-community work:
+Lovense **does** publish an official MCP server — a first-party
+Python script (`RemoteMCP.py`, shipped as `RemoteMCP.zip`),
+documented at developer.lovense.com/docs/ai/remote-mcp.html
+(page last updated 2025-07-03). The first version of this brief
+said otherwise; that survey checked registries and directories
+and missed Lovense's own developer docs. Corrected 2026-10-21.
+
+The official server was studied firsthand the same day (zip
+SHA-256 `c1cb2a6f…`, four files, ~4.7 KB of Python). It is a
+demo-grade thin bridge over this brief's own route — stdio,
+FastMCP, the Lovense Remote app's Game Mode over the LAN, no
+credentials — with exactly **two tools**:
+
+- `SendFunctions(python_expression)` — the parameter is accepted
+  and **ignored**; every call sends a hardcoded `Vibrate:10`
+  for 2 seconds to all toys.
+- `SendStopFunction()` — sends Stop.
+
+Its docs page advertises "commands, patterns, and presets"; the
+code implements neither patterns nor presets, has no discovery
+tool, no per-toy targeting (the `toy` field is always empty), no
+intensity control at all, no request timeout, and no safety
+contract of any kind. Its wire shape does confirm ours:
+`POST /command`, `Function` at apiVer 1, Stop as
+`Function`/`Stop`/timeSec 0. One wire fact matters for S2/S4:
+over HTTPS the app is addressed as
+`https://{dashed-ip}.lovense.club:{ssl-port}`, not by raw IP —
+the config in S2 and the S4 runbook must use that form.
+
+Community work also exists:
 
 - A PulseMCP-listed "Lovense" server (clotho2) driving the Game
   Mode API — community classification, no published safety
@@ -24,10 +52,13 @@ community work:
   experience "unstable and frustrating"). Different ecosystem:
   our bridge speaks the Lovense Standard API directly, by design.
 
-None of them enforces our safety contract, separates lanes, or
-carries a mock-transport test ladder. Under the estate's
-graduation rule this is a server, not a skill: it holds live
-connection state and enforces a decide()-class safety gate.
+None of them — official included — enforces our safety contract,
+separates lanes, or carries a mock-transport test ladder. That
+contract is this server's reason to exist: not first existence,
+but the only decide()-gated, ceiling-clamped, watchdog-guarded
+surface on this route. Under the estate's graduation rule this is
+a server, not a skill: it holds live connection state and
+enforces a decide()-class safety gate.
 
 ## What it is
 
