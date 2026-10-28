@@ -57,7 +57,8 @@ it binds **both** providers, enforced by the same code:
 - **No credentials.** The local Lovense route needs no token and the
   server holds none; the config loader refuses credential-shaped keys.
 
-Tools (protocol `2024-11-05`, newline-delimited JSON-RPC on stdio):
+Tools (protocol `2026-07-28`, modern era only — legacy `initialize`
+is refused with -32022; newline-delimited JSON-RPC on stdio):
 
 | Tool | What it does |
 | --- | --- |

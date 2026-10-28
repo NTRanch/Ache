@@ -3,7 +3,7 @@
 Commissioned by the Owner, 2026-10-21. Home: `NTRanch/Lovense`
 (this brief's canonical copy ships in that repo as `MCP-BRIEF.md`;
 build tracking lives in that repo's `CHECKLIST.md`, Phase 6).
-Register entry: IDEA-0080 (SFW index in the qompassai register;
+Register entry: IDEA-0080 (SFW index in the SFW-lane register;
 detailed tracking in the NTRanch lane per the Owner's tracking
 lane rule, 2026-10-21).
 
@@ -183,7 +183,7 @@ estate workspace).
 - Buttplug transport (revisit only if a target toy lacks
   Standard API support). **[Superseded 2026-10-27 — see the
   amendment above.]**
-- Any presence in the ai.qompass registry or on qompass.ai:
+- Any presence in any SFW-lane registry or on any SFW-lane site:
   this is an NTRanch-lane artifact, distributed from the
   NTRanch/Lovense GitHub repo.
 

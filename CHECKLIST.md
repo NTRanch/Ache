@@ -162,8 +162,8 @@ already rejected for STROBE in Phase 2's surface notes.
       server's acceptance; it absorbs the previously tabled
       live test rung.)
 - [ ] Standing exclusions: no cloud/server API route, no App
-      Gallery platform API (that is Phase 4), no presence in the
-      Qompass registry or site. (Buttplug transport moved to
+      Gallery platform API (that is Phase 4), no presence in any
+      SFW-lane registry or site. (Buttplug transport moved to
       Phase 7 P-A, 2026-10-22.)
 - UN-PARKED (Owner direction, 2026-10-22 — see Phase 7): the buttplug
   crate family (direct BLE, Lovense Connect relay, USB dongle)
@@ -179,8 +179,8 @@ already rejected for STROBE in Phase 2's surface notes.
 One gate, many transports. The MCP's decide() gate + safety contract become
 transport-independent; the safety contract does not dilute per transport.
 Sequencing: Lovense S2 → S3 → S4 stays the critical path; then P-C, then
-P-A, then P-B. P-D is last resort only. Never in the ai.qompass registry,
-never on qompass.ai, never routed to Azoth. We hold no credentials on any
+P-A, then P-B. P-D is last resort only. Never in any SFW-lane registry,
+never on any SFW-lane site, never routed to Azoth. We hold no credentials on any
 transport. Survey brief: `~/workspace/lovense-mcp-20261021/PLATFORM-EXPANSION.md`
 (sandbox; copy into this repo when Phase 7 opens).
 
@@ -207,7 +207,7 @@ transport. Survey brief: `~/workspace/lovense-mcp-20261021/PLATFORM-EXPANSION.md
 ## Standing rules
 
 - Tracking lanes (Owner, 2026-10-21): SFW tracking (the idea
-  register, the progress board) lives in the qompassai repos;
+  register, the progress board) lives in the SFW-lane repos;
   NSFW build tracking lives here in the NTRanch repos. This
   checklist is the canonical tracker for the work in this repo.
 

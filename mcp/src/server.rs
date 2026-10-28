@@ -1,21 +1,24 @@
-//! Hand-rolled MCP stdio server: newline-delimited JSON-RPC 2.0, protocol
-//! era 2024-11-05. Ten tools. The original eight (`lovense_*`) keep their
-//! names and shapes: two read-only (status, toys) and six for the output
-//! core (arm, disarm, function, pattern, preset, stop). Two unified
-//! read-only tools (`ache_devices`, `ache_device`) enumerate devices
-//! across both providers — the Lovense Standard API provider and the
-//! embedded Buttplug provider — with capabilities as data; the output
-//! tools route to either provider when given a unified `device` id.
-//! Every output, on either provider, passes the one `decide()` gate in
-//! `decide.rs` before anything can reach a device. Protocol misuse
-//! (unknown method or tool, bad arguments) is a JSON-RPC error; an
-//! operational failure (no target, unreachable app, a gate deny) is a
-//! tool result with `isError: true` and the structured error as its text.
+//! The tool surface and dispatch core. Ten tools. The original eight
+//! (`lovense_*`) keep their names and shapes: two read-only (status,
+//! toys) and six for the output core (arm, disarm, function, pattern,
+//! preset, stop). Two unified read-only tools (`ache_devices`,
+//! `ache_device`) enumerate devices across both providers — the
+//! Lovense Standard API provider and the embedded Buttplug provider —
+//! with capabilities as data; the output tools route to either
+//! provider when given a unified `device` id. Every output, on either
+//! provider, passes the one `decide()` gate in `decide.rs` before
+//! anything can reach a device. Protocol misuse (bad arguments) is a
+//! JSON-RPC error; an operational failure (no target, unreachable app,
+//! a gate deny) is a tool result with `isError: true` and the
+//! structured error as its text.
+//!
+//! The wire itself is no longer hand-rolled here: the era guard
+//! (`guard.rs`) owns the framing contract and the rmcp service
+//! (`service.rs`) owns the protocol, modern era only (2026-07-28).
+//! This module owns what neither may touch: the handlers, the tool
+//! definitions (served raw, unchanged), and the safety state.
 
-use std::io::{self, BufRead, Read, Write};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
@@ -24,33 +27,22 @@ use crate::decide::{
     AllowedOutput, Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent,
     TOY_ID_BYTES_MAX, decide, decide_plan, lovense_wire,
 };
-use crate::error::{AcheError, ErrorCode, truncate};
+use crate::error::{AcheError, ErrorCode};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
 use crate::state::SafetyState;
 use crate::transport::Transport;
 
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "ache";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Longest accepted input line, in bytes. Longer lines are discarded
-/// unread and answered with an invalid-request error.
-pub const LINE_BYTES_MAX: usize = 1024 * 1024;
-/// Most input lines buffered between the reader thread and the serve
-/// loop. Bounded, so a fast sender back-pressures instead of filling
-/// memory.
-const LINE_QUEUE_CAPACITY: usize = 64;
 /// Most unexpected argument names echoed back in a refusal.
 const ARGUMENT_NAMES_REPORTED_MAX: usize = 8;
 const ARGUMENT_NAME_BYTES_MAX: usize = 64;
 
-const PARSE_ERROR: i64 = -32700;
-const INVALID_REQUEST: i64 = -32600;
-const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
 /// Every tool the server serves, in `tools/list` order. The original
 /// eight keep their positions; the unified tools append.
-const TOOL_NAMES: [&str; 10] = [
+pub(crate) const TOOL_NAMES: [&str; 10] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -143,69 +135,23 @@ impl Server {
             .snapshot(self.target_configured(), self.config.intensity_ceiling)
     }
 
-    /// Handle one input line. Returns the response, or `None` for a
-    /// notification (a message without `id`), which is never answered.
-    pub fn handle_line(&self, line: &[u8]) -> Option<Value> {
-        let message: Value = match serde_json::from_slice(line) {
-            Ok(message) => message,
-            Err(cause) => return Some(rpc_error(Value::Null, PARSE_ERROR, cause.to_string())),
-        };
-        let Some(object) = message.as_object() else {
-            return Some(rpc_error(
-                Value::Null,
-                INVALID_REQUEST,
-                "message must be an object",
-            ));
-        };
-        let id = match object.get("id") {
-            None => return None,
-            Some(id @ (Value::String(_) | Value::Number(_))) => id.clone(),
-            Some(_) => {
-                return Some(rpc_error(
-                    Value::Null,
-                    INVALID_REQUEST,
-                    "id must be string or number",
-                ));
-            }
-        };
-        if object.get("jsonrpc") != Some(&json!("2.0")) {
-            return Some(rpc_error(id, INVALID_REQUEST, "jsonrpc must be \"2.0\""));
-        }
-        let Some(method) = object.get("method").and_then(Value::as_str) else {
-            return Some(rpc_error(id, INVALID_REQUEST, "method must be a string"));
-        };
-        let outcome = match method {
-            "initialize" => Ok(initialize_result()),
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tool_list() })),
-            "tools/call" => self.call_tool(object.get("params")),
-            _ => Err((
-                METHOD_NOT_FOUND,
-                format!("unknown method `{}`", clip(method)),
-            )),
-        };
-        Some(match outcome {
-            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err((code, message)) => rpc_error(id, code, message),
-        })
-    }
-
-    fn call_tool(&self, params: Option<&Value>) -> Result<Value, (i64, String)> {
-        let Some(params) = params.and_then(Value::as_object) else {
-            return Err((INVALID_PARAMS, "params must be an object".into()));
-        };
-        let Some(name) = params.get("name").and_then(Value::as_str) else {
-            return Err((INVALID_PARAMS, "params.name must be a string".into()));
-        };
-        if !TOOL_NAMES.contains(&name) {
-            return Err((INVALID_PARAMS, format!("unknown tool `{}`", clip(name))));
-        }
-        // A tool call is a sign of life: fire the watchdog first if the
-        // window already elapsed in silence, then count this call as
-        // the latest heartbeat.
+    /// Dispatch one shape-validated tool call. The era guard has
+    /// already answered the envelope questions (params shape, name,
+    /// known tool) with the historical messages; what remains is the
+    /// handler contract: a tool result value, or a protocol refusal
+    /// `(code, message)` for field-level misuse.
+    ///
+    /// A tool call is a sign of life: fire the watchdog first if the
+    /// window already elapsed in silence, then count this call as
+    /// the latest heartbeat.
+    pub(crate) fn dispatch_call(
+        &self,
+        name: &str,
+        arguments: Option<Value>,
+    ) -> Result<Value, (i64, String)> {
         self.trip_watchdog();
         self.lock_state().note_activity();
-        let outcome = self.dispatch(name, params.get("arguments"));
+        let outcome = self.dispatch(name, arguments.as_ref());
         match outcome {
             Ok(value) => Ok(tool_result(&value, false)),
             Err(CallError::Operational(error)) => Ok(tool_result(&error.to_json(), true)),
@@ -629,12 +575,6 @@ impl Server {
         tripped
     }
 
-    /// Time until the watchdog fires, when output is active.
-    pub fn watchdog_remaining(&self) -> Option<Duration> {
-        self.lock_state()
-            .watchdog_remaining(self.config.watchdog_secs)
-    }
-
     pub fn output_active(&self) -> bool {
         self.lock_state().output_active()
     }
@@ -731,125 +671,7 @@ fn plan_effective(plan: &AllowedOutput) -> Value {
     }
 }
 
-/// One line of input, as read by the reader thread.
-enum LineEvent {
-    Line(Vec<u8>),
-    Oversized,
-    /// End of input, or a read error (logged by the reader thread):
-    /// either way the session is over and cleanup runs.
-    End,
-}
-
-/// Serve until end of input. Each line in is at most one response out.
-///
-/// Lines are read on a thread so the loop can fire the heartbeat
-/// watchdog while the client is silent: with output active, the loop
-/// waits only until the watchdog deadline, trips it, and waits on.
-/// When input ends, the explicit shutdown path zeroes any active
-/// output before returning.
-pub fn serve(
-    server: &Server,
-    input: impl BufRead + Send + 'static,
-    mut output: impl Write,
-) -> io::Result<()> {
-    let (sender, receiver) = mpsc::sync_channel::<LineEvent>(LINE_QUEUE_CAPACITY);
-    let _reader = std::thread::spawn(move || {
-        let mut input = input;
-        loop {
-            let mut line = Vec::new();
-            let limit = u64::try_from(LINE_BYTES_MAX + 1).expect("line limit fits u64");
-            let read = match (&mut input).take(limit).read_until(b'\n', &mut line) {
-                Ok(read) => read,
-                Err(error) => {
-                    eprintln!("ache: stdin read failed: {error}");
-                    let _ = sender.send(LineEvent::End);
-                    return;
-                }
-            };
-            if read == 0 {
-                let _ = sender.send(LineEvent::End);
-                return;
-            }
-            let event = if line.len() > LINE_BYTES_MAX && line.last() != Some(&b'\n') {
-                if input.skip_until(b'\n').is_err() {
-                    let _ = sender.send(LineEvent::End);
-                    return;
-                }
-                LineEvent::Oversized
-            } else {
-                LineEvent::Line(line)
-            };
-            if sender.send(event).is_err() {
-                return;
-            }
-        }
-    });
-    let mut result = Ok(());
-    loop {
-        // Check the watchdog on every pass, not only on timeouts, so a
-        // stream of non-tool messages cannot keep output alive past
-        // its window: only tool calls count as heartbeats.
-        server.trip_watchdog();
-        let event = match server.watchdog_remaining() {
-            Some(remaining) => match receiver.recv_timeout(remaining) {
-                Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => LineEvent::End,
-            },
-            None => match receiver.recv() {
-                Ok(event) => event,
-                Err(_) => LineEvent::End,
-            },
-        };
-        let response = match event {
-            LineEvent::End => break,
-            LineEvent::Oversized => Some(rpc_error(
-                Value::Null,
-                INVALID_REQUEST,
-                format!("line exceeds {LINE_BYTES_MAX} bytes"),
-            )),
-            LineEvent::Line(line) => {
-                if line.iter().all(u8::is_ascii_whitespace) {
-                    None
-                } else {
-                    server.handle_line(&line)
-                }
-            }
-        };
-        if let Some(response) = response {
-            let written = (|| -> io::Result<()> {
-                serde_json::to_writer(&mut output, &response).map_err(io::Error::other)?;
-                output.write_all(b"\n")?;
-                output.flush()
-            })();
-            if let Err(error) = written {
-                result = Err(error);
-                break;
-            }
-        }
-    }
-    if server.zero_on_shutdown() {
-        eprintln!("ache: input closed with output active; stop sent, output zeroed");
-    }
-    result
-}
-
-fn initialize_result() -> Value {
-    json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
-        "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-        "instructions": "ache — unified haptics: Lovense local Game Mode and an \
-            embedded Buttplug server behind one surface. Tools: lovense_status, \
-            lovense_toys, lovense_arm, lovense_disarm, lovense_function, \
-            lovense_pattern, lovense_preset, lovense_stop, ache_devices, \
-            ache_device. Output is off by default: arm explicitly, every output \
-            on either provider passes the one safety gate that clamps intensity \
-            to the configured ceiling, and stop always works.",
-    })
-}
-
-fn tool_list() -> Value {
+pub(crate) fn tool_list() -> Value {
     let no_arguments = json!({ "type": "object", "properties": {}, "additionalProperties": false });
     let toy_argument = json!({
         "type": "string",
@@ -1203,12 +1025,13 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
-    let message = truncate(message.into());
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+/// Whether `name` is one of the ten served tools. The era guard
+/// asks before forwarding a `tools/call`; dispatch trusts it.
+pub(crate) fn is_known_tool(name: &str) -> bool {
+    TOOL_NAMES.contains(&name)
 }
 
-fn clip(text: &str) -> &str {
+pub(crate) fn clip(text: &str) -> &str {
     let mut cut = text.len().min(ARGUMENT_NAME_BYTES_MAX);
     while !text.is_char_boundary(cut) {
         cut -= 1;
@@ -1218,6 +1041,8 @@ fn clip(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::test_stub::{AppStub, closed_port};
     use crate::transport::{MockTransport, ReadRequest, from_config};
@@ -1236,16 +1061,18 @@ mod tests {
         }
     }
 
-    fn request(server: &Server, line: &str) -> Value {
-        server
-            .handle_line(line.as_bytes())
-            .expect("a request is answered")
-    }
-
+    /// Call a tool through the dispatch entry the rmcp service
+    /// uses, wrapped in the response envelope the assertions were
+    /// written against. (Envelope-level behavior — framing, era
+    /// refusal, unknown tools — is gated in `guard.rs` and the stdio
+    /// integration tests, where it now lives.)
     fn call(server: &Server, name: &str, arguments: Value) -> Value {
-        let line = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-            "params": {"name": name, "arguments": arguments}});
-        request(server, &line.to_string())
+        match server.dispatch_call(name, Some(arguments)) {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": 7, "result": result}),
+            Err((code, message)) => {
+                json!({"jsonrpc": "2.0", "id": 7, "error": {"code": code, "message": message}})
+            }
+        }
     }
 
     /// The tool payload and its isError flag.
@@ -1274,27 +1101,9 @@ mod tests {
     // --- validation ---------------------------------------------------
 
     #[test]
-    fn initialize_reports_legacy_era_and_server_info() {
-        let response = request(
-            &server_for(Config::default()),
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
-        );
-        assert_eq!(response["id"], 1);
-        assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
-        assert_eq!(
-            response["result"]["serverInfo"],
-            json!({"name": "ache", "version": "0.3.0"})
-        );
-        assert_eq!(response["result"]["capabilities"], json!({"tools": {}}));
-    }
-
-    #[test]
     fn tools_list_is_exactly_the_ten_tools_with_full_schemas() {
-        let response = request(
-            &server_for(Config::default()),
-            r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#,
-        );
-        let tools = response["result"]["tools"].as_array().unwrap();
+        let listed = tool_list();
+        let tools = listed.as_array().unwrap();
         let names: Vec<&str> = tools
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
@@ -1344,7 +1153,7 @@ mod tests {
         assert_eq!(status["session_health"], "ok");
         assert_eq!(status["intensity_ceiling"], 20);
         assert_eq!(status["watchdog_secs"], 5);
-        assert_eq!(status["server"]["version"], "0.3.0");
+        assert_eq!(status["server"]["version"], "0.4.0");
         assert!(!status.to_string().contains("connected"));
     }
 
@@ -1408,25 +1217,6 @@ mod tests {
         assert_eq!(toys["source"], "live_discovery");
         assert_eq!(toys["toys"][0]["name"], "nora");
         assert_eq!(stub.received()["body"], r#"{"command":"GetToys"}"#);
-    }
-
-    #[test]
-    fn ping_answers_and_notifications_get_no_response() {
-        let server = server_for(Config::default());
-        assert_eq!(
-            request(&server, r#"{"jsonrpc":"2.0","id":9,"method":"ping"}"#)["result"],
-            json!({})
-        );
-        assert!(
-            server
-                .handle_line(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-                .is_none()
-        );
-        assert!(
-            server
-                .handle_line(br#"{"jsonrpc":"2.0","method":"no/such"}"#)
-                .is_none()
-        );
     }
 
     #[test]
@@ -1613,30 +1403,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_is_refused_and_touches_nothing() {
-        let mock = MockTransport::new();
-        let log = mock.request_log();
-        let server = Server::new(Config::default(), Some(Box::new(mock)));
-        for name in [
-            "lovense_heartbeat",
-            "lovense_patternv2",
-            "lovense_vibrate",
-            "LOVENSE_TOYS",
-            "",
-        ] {
-            let response = call(&server, name, json!({}));
-            assert_eq!(response["error"]["code"], INVALID_PARAMS, "tool {name}");
-            assert!(
-                response["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("unknown tool")
-            );
-        }
-        assert!(log.lock().unwrap().is_empty());
-    }
-
-    #[test]
     fn extra_argument_fields_are_refused_before_any_transport_call() {
         let mock = MockTransport::new();
         let log = mock.request_log();
@@ -1654,82 +1420,6 @@ mod tests {
             }
         }
         assert!(log.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn malformed_json_rpc_is_answered_with_protocol_errors() {
-        let server = server_for(Config::default());
-        let cases: &[(&str, i64)] = &[
-            ("{not json", PARSE_ERROR),
-            ("\u{0}\u{1}", PARSE_ERROR),
-            ("[]", INVALID_REQUEST),
-            (
-                r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
-                INVALID_REQUEST,
-            ),
-            ("42", INVALID_REQUEST),
-            (
-                r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#,
-                INVALID_REQUEST,
-            ),
-            (r#"{"id":1,"method":"ping"}"#, INVALID_REQUEST),
-            (
-                r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#,
-                INVALID_REQUEST,
-            ),
-            (
-                r#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#,
-                INVALID_REQUEST,
-            ),
-            (r#"{"jsonrpc":"2.0","id":1,"method":7}"#, INVALID_REQUEST),
-            (
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/destroy"}"#,
-                METHOD_NOT_FOUND,
-            ),
-            (
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#,
-                INVALID_PARAMS,
-            ),
-            (
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":[]}"#,
-                INVALID_PARAMS,
-            ),
-            (
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":3}}"#,
-                INVALID_PARAMS,
-            ),
-        ];
-        for (line, code) in cases {
-            assert_eq!(
-                request(&server, line)["error"]["code"],
-                *code,
-                "line {line}"
-            );
-        }
-    }
-
-    #[test]
-    fn serve_bounds_lines_and_survives_garbage() {
-        let server = server_for(Config::default());
-        let mut input = Vec::new();
-        input.extend_from_slice(&vec![b'x'; LINE_BYTES_MAX + 10]);
-        input.extend_from_slice(b"\n\n   \n{oops\n");
-        input.extend_from_slice(br#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#);
-        let mut output = Vec::new();
-        serve(&server, io::Cursor::new(input), &mut output).unwrap();
-        let lines: Vec<Value> = output
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_slice(line).unwrap())
-            .collect();
-        assert_eq!(
-            lines.len(),
-            3,
-            "oversized, parse error, ping; blank lines unanswered"
-        );
-        assert_eq!(lines[0]["error"]["code"], INVALID_REQUEST);
-        assert_eq!(lines[1]["error"]["code"], PARSE_ERROR);
-        assert_eq!(lines[2]["id"], 5);
     }
 
     #[test]
@@ -1897,41 +1587,13 @@ mod tests {
         assert!(!is_error, "a fresh arm restores output");
     }
 
-    /// A reader that yields the first chunk, then sleeps, then the
-    /// rest: silence on the wire, in serve-loop time.
-    struct SlowLines {
-        first: Vec<u8>,
-        rest: Vec<u8>,
-        position: usize,
-        slept: bool,
-        delay: Duration,
-    }
-
-    impl io::Read for SlowLines {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            if self.position < self.first.len() {
-                let n = (self.first.len() - self.position).min(buffer.len());
-                buffer[..n].copy_from_slice(&self.first[self.position..self.position + n]);
-                self.position += n;
-                return Ok(n);
-            }
-            if !self.slept {
-                std::thread::sleep(self.delay);
-                self.slept = true;
-            }
-            let offset = self.position - self.first.len();
-            if offset < self.rest.len() {
-                let n = (self.rest.len() - offset).min(buffer.len());
-                buffer[..n].copy_from_slice(&self.rest[offset..offset + n]);
-                self.position += n;
-                return Ok(n);
-            }
-            Ok(0)
-        }
-    }
-
     #[test]
     fn watchdog_fires_during_silence_without_a_next_request() {
+        // The production watchdog is a timer task polling
+        // `trip_watchdog` (service.rs); this test drives that same
+        // entry point the way the poller does and asserts the trip
+        // lands — output zeroed, master latched off — with no
+        // further request involved.
         let config = Config {
             watchdog_secs: 1,
             ..Config::default()
@@ -1939,43 +1601,30 @@ mod tests {
         let mock = MockTransport::new();
         let sent = mock.sent_log();
         let server = Server::new(config, Some(Box::new(mock)));
-        let request_line = |id: i64, name: &str, arguments: Value| -> String {
-            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-                "params": {"name": name, "arguments": arguments}})
-            .to_string()
-        };
-        let first = format!(
-            "{}\n{}\n",
-            request_line(1, "lovense_arm", json!({})),
-            request_line(2, "lovense_function", function_args(6)),
-        );
-        let rest = format!("{}\n", request_line(3, "lovense_status", json!({})));
-        let slow = SlowLines {
-            first: first.into_bytes(),
-            rest: rest.into_bytes(),
-            position: 0,
-            slept: false,
-            delay: Duration::from_millis(1_600),
-        };
-        let mut output = Vec::new();
-        serve(&server, io::BufReader::new(slow), &mut output).unwrap();
-        // The wire zero went out during the silence, before the status
-        // request was even read.
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(6)));
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0]["action"], "Vibrate:6");
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !server.trip_watchdog() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the watchdog must trip within its window plus slack"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
         {
             let sent = sent.lock().unwrap();
             assert_eq!(sent.len(), 2);
-            assert_eq!(sent[0]["action"], "Vibrate:6");
-            assert_eq!(sent[1]["action"], "Stop");
+            assert_eq!(sent[1]["action"], "Stop", "the trip sends the wire zero");
         }
-        let responses: Vec<Value> = output
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_slice(line).unwrap())
-            .collect();
-        assert_eq!(responses.len(), 3);
-        let (status, _) = payload(&responses[2]);
+        let status = status_of(&server);
         assert_eq!(status["watchdog_trips"], 1);
         assert_eq!(status["output_active"], false);
+        assert_eq!(status["armed"], false);
     }
 
     #[test]
@@ -2072,18 +1721,16 @@ mod tests {
 
     #[test]
     fn shutdown_at_eof_zeroes_active_output() {
+        // `zero_on_shutdown` is the exact call the process runs when
+        // stdin reaches EOF (main.rs); the EOF-at-the-binary level is
+        // gated in the stdio integration tests.
         let mock = MockTransport::new();
         let sent = mock.sent_log();
         let server = Server::new(Config::default(), Some(Box::new(mock)));
-        let input = format!(
-            "{}\n{}\n",
-            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "lovense_arm", "arguments": {}}}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                "params": {"name": "lovense_function", "arguments": function_args(7)}}),
-        );
-        let mut output = Vec::new();
-        serve(&server, io::Cursor::new(input.into_bytes()), &mut output).unwrap();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(7)));
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        assert!(server.zero_on_shutdown(), "active output is zeroed");
         let sent = sent.lock().unwrap();
         assert_eq!(sent.len(), 2, "the function and the shutdown zero");
         assert_eq!(sent[1]["action"], "Stop");

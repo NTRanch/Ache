@@ -123,17 +123,6 @@ impl SafetyState {
             && self.last_activity.elapsed() > Duration::from_secs(u64::from(watchdog_secs))
     }
 
-    /// Time left before the watchdog fires, when output is active;
-    /// `None` when it cannot fire. A zero duration means fire now.
-    #[must_use]
-    pub fn watchdog_remaining(&self, watchdog_secs: u8) -> Option<Duration> {
-        if !self.output_active {
-            return None;
-        }
-        let window = Duration::from_secs(u64::from(watchdog_secs));
-        Some(window.saturating_sub(self.last_activity.elapsed()))
-    }
-
     /// Fire the watchdog: zero output, latch off, count the trip.
     /// Returns true exactly when this call tripped, so the caller sends
     /// the wire zero once.
@@ -196,7 +185,6 @@ mod tests {
         let mut state = SafetyState::new();
         state.backdate_activity(3_600);
         assert!(!state.watchdog_expired(5));
-        assert_eq!(state.watchdog_remaining(5), None);
         assert!(!state.trip_watchdog_if_expired(5));
     }
 

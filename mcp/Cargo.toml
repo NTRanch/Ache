@@ -1,6 +1,6 @@
 [package]
 name = "ache"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "ache — unified haptics MCP stdio server: Lovense Standard API and embedded Buttplug.io behind one tool surface, every output through the pure decide() safety gate"
@@ -23,8 +23,14 @@ buttplug_server = "12"
 buttplug_server_device_config = "12"
 buttplug_server_hwmgr_btleplug = "12"
 buttplug_server_hwmgr_serial = "12"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-std", "io-util"] }
 futures = "0.3"
+# The MCP protocol layer (fleet standardization, D-113): rmcp, modern
+# era only (2026-07-28). The era guard in guard.rs owns the stdio
+# framing contract; rmcp never sees a legacy frame. Schemas are served
+# raw through rmcp's Tool type — schemars is compiled in only because
+# it is a hard dependency of those types; it never generates a schema.
+rmcp = { version = "=3.8.0", default-features = false, features = ["server"] }
 
 [profile.release]
 overflow-checks = true

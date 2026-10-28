@@ -3,6 +3,25 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
+## 0.4.0 — 2026-10-27 — rmcp migration, modern era only
+
+The protocol layer moves from the hand-rolled stdio loop to the
+official Rust SDK (rmcp 3.8.0), serving the modern era
+(2026-07-28) only, per the fleet standardization (D-113).
+
+- `server/discover` replaces the `initialize` handshake; a legacy
+  `initialize` is refused with the typed era error -32022 by the
+  byte-level era guard in front of the SDK, which also restores
+  the baseline framing contract (malformed lines answered, 4 MiB
+  line bound) and serializes dispatch in wire order.
+- Tool names, schemas, result payloads, refusal codes, and refusal
+  messages are unchanged (canonicalized-JSON parity against the
+  0.3.0 baseline; see the WS2 gate report).
+- `decide()` / `decide_plan()` are byte-identical to 0.3.0 — the
+  migration's diff over `src/decide.rs` is empty.
+- U5 is unchanged: stop is available in every state and never
+  gated.
+
 ## 0.3.0 — 2026-10-27 — ache: the unified haptics server
 
 The Lovense MCP server and Buttplug.io support are one server now,
