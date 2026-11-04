@@ -79,6 +79,138 @@ cannot serve at all), `capability_unsupported` (the device exists but
 does not offer that), and `device_not_found` (no provider can see
 that id).
 
+
+## Tool reference (complete, from the live `tools/list` at 1.0.0)
+
+Every tool's description, input schema properties, and
+annotations, transcribed from the server's own
+`tools/list` response at 1.0.0 (the same payload
+measured in `EFLO.md`). Required properties are marked
+with `*`; all other properties are optional.
+
+### `lovense_status`
+
+Report the server state (unconfigured, mock, or ready), transport, target, arm state, output activity, session health, intensity ceiling, watchdog window, and version. Makes no network call; `ready` means a target is configured, not that it answered.
+
+Inputs: none.
+
+Annotations: readOnlyHint=true, destructiveHint=false, idempotentHint=true.
+
+### `lovense_toys`
+
+Discover connected toys. Mock transport: the fixture toys. Real transport: one GetToys request to the configured app; an unreachable app is an error, never an empty list. Real with no host: target_unconfigured, and no request is made. Discovery is safe while disarmed and arms nothing.
+
+Inputs: none.
+
+Annotations: readOnlyHint=true, destructiveHint=false, idempotentHint=true.
+
+### `lovense_arm`
+
+Arm the master toggle — the explicit act that makes output possible. Refuses without a configured target. Arming starts no output by itself, and nothing else arms: not connecting, not discovering, not a previous session.
+
+Inputs: none.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true.
+
+### `lovense_disarm`
+
+Master off. If output is active it is zeroed on the wire synchronously before this call answers. Afterwards every output is denied until lovense_arm is called again.
+
+Inputs: none.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true.
+
+### `lovense_function`
+
+Run one function at one strength for a bounded duration. Requires the armed state. The strength is clamped in code to the configured ceiling and the feature's own range; the result reports the effective values actually sent.
+
+Inputs:
+- `device` (string): Unified device id from ache_devices (e.g. "buttplug:0" or "lovense:<toy id>"). When given, it selects the target device and its provider, the gate plans against that device's reported capabilities, and `toy` is ignored.
+- `feature*` (string): The function to run.
+- `strength*` (integer): Requested strength; clamped to the ceiling and the feature range before it reaches the wire.
+- `time_sec*` (integer): Duration in seconds. Bounded: indefinite output does not exist here.
+- `toy` (string): Toy id from lovense_toys; omit to target every toy.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=false.
+
+### `lovense_pattern`
+
+Run a pattern: a strength sequence stepped at a fixed interval. Requires the armed state. The rule is built by the server from validated parts — feature letters from v r p t f s d o, an interval strictly above 100 ms, at most 50 strengths, each clamped to the ceiling in code.
+
+Inputs:
+- `device` (string): Unified device id from ache_devices (e.g. "buttplug:0" or "lovense:<toy id>"). When given, it selects the target device and its provider, the gate plans against that device's reported capabilities, and `toy` is ignored.
+- `features` (string): Feature letters (v r p t f s d o). Omit or empty for all functions.
+- `interval_ms*` (integer): Step interval in milliseconds, strictly above 100.
+- `strengths*` (array): One strength per step; each is clamped to the ceiling.
+- `time_sec*` (integer): Duration in seconds. Bounded: indefinite output does not exist here.
+- `toy` (string): Toy id from lovense_toys; omit to target every toy.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=false.
+
+### `lovense_preset`
+
+Run a built-in Remote app preset (pulse, wave, fireworks, earthquake) for a bounded duration. Requires the armed state. Names outside the built-in list are refused; the server does not guess at presets.
+
+Inputs:
+- `device` (string): Unified device id from ache_devices (e.g. "buttplug:0" or "lovense:<toy id>"). When given, it selects the target device and its provider, the gate plans against that device's reported capabilities, and `toy` is ignored.
+- `name*` (string): The built-in preset to run.
+- `time_sec*` (integer): Duration in seconds. Bounded: indefinite output does not exist here.
+- `toy` (string): Toy id from lovense_toys; omit to target every toy.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=false.
+
+### `lovense_stop`
+
+Panic zero: stop every function on every device on both providers, synchronously, and latch the master off so recovery is a fresh explicit arm. Always available — disarmed, unconfigured, mid-pattern — and never gated.
+
+Inputs: none.
+
+Annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true.
+
+### `ache_devices`
+
+Discover every device across both providers (Lovense Standard API and embedded Buttplug), in one unified model: id, provider, name, battery, and capabilities as data — each capability carries its maximum on the unified 0..=20 strength scale, or null when the capability is reported but not mapped. A provider that cannot enumerate reports its typed error in its entry; the call fails only when no provider could enumerate. Discovery is safe while disarmed and arms nothing.
+
+Inputs: none.
+
+Annotations: readOnlyHint=true, destructiveHint=false, idempotentHint=true.
+
+### `ache_device`
+
+One device by its unified id (from ache_devices), with its full capability list as data. A device no provider can see is a typed device_not_found; a provider that cannot enumerate surfaces its own typed error rather than a claimed absence.
+
+Inputs:
+- `device*` (string): Unified device id, e.g. "buttplug:0" or "lovense:<toy id>".
+
+Annotations: readOnlyHint=true, destructiveHint=false, idempotentHint=true.
+
+### Error codes (complete)
+
+Domain failures return as `isError` results carrying
+`{"error": {"code", "class", "message"}}`. Every code
+the server can emit (`src/error.rs`):
+
+| Code | Class | Meaning |
+| --- | --- | --- |
+| `config_missing` | configuration | `ACHE_MCP_CONFIG` names a file that does not exist. |
+| `config_unreadable` | configuration | The config file exists but cannot be read. |
+| `config_invalid` | configuration | The config file fails validation (unknown keys are refused at every level; credential-shaped keys are refused). |
+| `target_unconfigured` | target | No Lovense target is configured (no host), and the call needs one; no network call is made. |
+| `target_unreachable` | transport | The configured Lovense target did not answer. |
+| `response_invalid` | transport | The target answered, but the reply was not the documented shape (or exceeded the 256 KiB cap). |
+| `app_error` | transport | The Lovense app answered with a refusal code; the code is surfaced, never swallowed. |
+| `not_armed` | safety | An output was attempted while the master toggle is off. The gate refuses; nothing is sent. |
+| `request_invalid` | request | The tool arguments fail validation (unknown feature, out-of-range strength/duration, malformed pattern parts, unknown preset name, and similar). |
+| `provider_unavailable` | transport | A named provider (Lovense or Buttplug) cannot serve at all in this process: disabled, not wired, or its embedded stack failed to start. *(Added by the unification, 0.3.0.)* |
+| `capability_unsupported` | target | The device exists but does not offer the requested capability — a feature it lacks, or a Lovense-only preset aimed at a Buttplug device. *(Added by the unification, 0.3.0.)* |
+| `device_not_found` | target | A unified device id names no device any provider can see. *(Added by the unification, 0.3.0.)* |
+
+Protocol-level failures are JSON-RPC errors, not tool
+results: `-32022` legacy era (`initialize` refused; use
+`server/discover` with 2026-07-28), `-32700` malformed
+JSON, `-32600` invalid request, `-32601` unknown method,
+`-32602` unknown tool or invalid params.
+
 ## Configuration
 
 Set `ACHE_MCP_CONFIG` to a TOML file (renamed from

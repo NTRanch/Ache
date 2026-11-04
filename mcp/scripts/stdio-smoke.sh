@@ -41,7 +41,7 @@ discover = lines[0]["result"]
 assert discover["supportedVersions"] == ["2026-07-28"]
 info = discover["_meta"]["io.modelcontextprotocol/serverInfo"]
 assert info["name"] == "ache"
-assert info["version"] == "0.4.0"
+assert info["version"] == "1.0.0"
 names = [tool["name"] for tool in lines[1]["result"]["tools"]]
 assert names == ["lovense_status", "lovense_toys", "lovense_arm", "lovense_disarm",
                  "lovense_function", "lovense_pattern", "lovense_preset", "lovense_stop",
