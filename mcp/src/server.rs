@@ -2180,3 +2180,432 @@ mod tests {
         assert_eq!(sent.lock().unwrap().len(), 1);
     }
 }
+
+// ---------------------------------------------------------------------
+// AC-2 — "Stop is immediate and never gated" (plan ache.md, AC-2).
+//
+// The battery below closes the state enumeration for the stop
+// guarantee. The pre-existing tests already proved several states
+// (gate-level allow in decide.rs, idempotent stop, mid-pattern stop
+// latency, watchdog expiry, session drop, shutdown, cross-provider
+// zero); this module adds the states that battery did not name:
+//
+//   * a single stop matrix over every idle/active session state,
+//     each with the same oracle: the wire zero is present BEFORE the
+//     stop call answers (synchronous), the call lands inside the
+//     estate's 1 s CI-safe immediacy bound, the master latches off,
+//     a second stop is equally available, and no output can follow
+//     without a fresh explicit arm;
+//   * heartbeat HEALTHY (inside the watchdog window): output is
+//     not zeroed early, and stop is still the next wire command;
+//   * heartbeat LOST, both ways it can be observed: the watchdog
+//     timer path zeroes with no further request at all, and a stop
+//     that is itself the first call after the loss is not swallowed
+//     by the watchdog trip that dispatch performs first;
+//   * stop after a session drop (degraded session): degradation
+//     does not gate stop;
+//   * stop with no target configured at all: a local zero, reported
+//     honestly as `stop_sent: false`, never a refusal;
+//   * the gate-level matrix completed to all four armed x target
+//     combinations (the pre-existing test covered three);
+//   * unified (Buttplug fixture) sessions: stop from an active
+//     function and from an active pattern, with pattern cancel.
+//
+// Everything here is silent and hardware-free: the Lovense side is
+// the mock transport's recorded wire log and the Buttplug side is
+// the fixture provider. No real device is contacted, nothing is
+// actuated, and no sound is produced. The stop/gate semantics under
+// test are NOT changed by this module — it only observes them.
+#[cfg(test)]
+mod ac2_stop_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Value, json};
+
+    use super::Server;
+    use crate::config::{Config, TransportKind};
+    use crate::decide::{Decision, GateSnapshot, OutputIntent, decide};
+    use crate::provider::FakeButtplug;
+    use crate::transport::{MockTransport, from_config};
+
+    /// The immediacy bound the pre-existing mid-pattern stop test
+    /// established (1 s, CI-safe). AC-2 holds every state to it.
+    const STOP_BOUND: Duration = Duration::from_secs(1);
+
+    fn call(server: &Server, name: &str, arguments: Value) -> Value {
+        match server.dispatch_call(name, Some(arguments)) {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": 7, "result": result}),
+            Err((code, message)) => {
+                json!({"jsonrpc": "2.0", "id": 7, "error": {"code": code, "message": message}})
+            }
+        }
+    }
+
+    fn payload(response: &Value) -> (Value, bool) {
+        let result = &response["result"];
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        (
+            serde_json::from_str(text).unwrap(),
+            result["isError"].as_bool().unwrap(),
+        )
+    }
+
+    fn status_of(server: &Server) -> Value {
+        payload(&call(server, "lovense_status", json!({}))).0
+    }
+
+    fn arm(server: &Server) {
+        let (_, is_error) = payload(&call(server, "lovense_arm", json!({})));
+        assert!(!is_error, "arm must succeed here");
+    }
+
+    fn function_args(strength: i64) -> Value {
+        json!({"feature": "Vibrate", "strength": strength, "time_sec": 30})
+    }
+
+    fn mock_server() -> (Server, Arc<Mutex<Vec<Value>>>) {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        (Server::new(Config::default(), Some(Box::new(mock))), sent)
+    }
+
+    /// The AC-2 oracle, applied identically from every state: stop
+    /// answers successfully inside the bound, the wire zero is
+    /// already recorded when it answers (synchronous — not queued,
+    /// not deferred), the state is zeroed and latched off, a repeat
+    /// stop is just as available, and output afterwards is denied
+    /// `not_armed` and sends nothing.
+    fn assert_stop_zeroes(
+        server: &Server,
+        sent: &Arc<Mutex<Vec<Value>>>,
+        wire_before: usize,
+        state: &str,
+    ) {
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            wire_before,
+            "{state}: wire count before stop"
+        );
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(server, "lovense_stop", json!({})));
+        let elapsed = started.elapsed();
+        assert!(!is_error, "{state}: stop must never be refused");
+        assert_eq!(stopped["stop_sent"], true, "{state}: a zero was sent");
+        assert_eq!(stopped["armed"], false, "{state}: stop result latches off");
+        assert_eq!(stopped["output_active"], false, "{state}");
+        assert!(
+            elapsed < STOP_BOUND,
+            "{state}: stop immediacy bound exceeded: {elapsed:?}"
+        );
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(
+                sent.len(),
+                wire_before + 1,
+                "{state}: the zero is on the wire before stop answers"
+            );
+            assert_eq!(sent[wire_before]["command"], "Function", "{state}");
+            assert_eq!(sent[wire_before]["action"], "Stop", "{state}");
+            assert_eq!(sent[wire_before]["timeSec"], 0, "{state}");
+        }
+        let status = status_of(server);
+        assert_eq!(
+            status["armed"], false,
+            "{state}: stop latches the master off"
+        );
+        assert_eq!(status["output_active"], false, "{state}");
+
+        // Idempotent from the zeroed state too, on the same terms.
+        let (stopped, is_error) = payload(&call(server, "lovense_stop", json!({})));
+        assert!(!is_error, "{state}: a repeat stop must never be refused");
+        assert_eq!(stopped["stop_sent"], true, "{state}");
+        assert_eq!(sent.lock().unwrap().len(), wire_before + 2, "{state}");
+
+        // Nothing resumes and nothing is queued behind the stop:
+        // output without a fresh explicit arm is denied and silent.
+        let (error, is_error) = payload(&call(server, "lovense_function", function_args(5)));
+        assert!(is_error, "{state}");
+        assert_eq!(error["error"]["code"], "not_armed", "{state}");
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            wire_before + 2,
+            "{state}: a denied call sends nothing"
+        );
+    }
+
+    // --- the state matrix -------------------------------------------
+
+    #[test]
+    fn ac2_stop_matrix_from_every_idle_and_active_state() {
+        // Idle, never armed.
+        let (server, sent) = mock_server();
+        assert_stop_zeroes(&server, &sent, 0, "idle, never armed");
+
+        // Idle, armed, no output started.
+        let (server, sent) = mock_server();
+        arm(&server);
+        assert_stop_zeroes(&server, &sent, 0, "idle, armed");
+
+        // Active function, heartbeat healthy (just started).
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(9)));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "active function");
+
+        // Active preset.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(
+            &server,
+            "lovense_preset",
+            json!({"name": "pulse", "time_sec": 30}),
+        ));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "active preset");
+
+        // Mid-pattern: a 30 s pattern whose output is still active
+        // when stop arrives.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(
+            &server,
+            "lovense_pattern",
+            json!({"features": "v", "interval_ms": 400, "strengths": [10, 10], "time_sec": 30}),
+        ));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "mid-pattern");
+
+        // Already disarmed (disarm sent its own zero): an explicit
+        // stop afterwards is still available and still sends.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(9)));
+        payload(&call(&server, "lovense_disarm", json!({})));
+        assert_stop_zeroes(&server, &sent, 2, "after disarm");
+    }
+
+    #[test]
+    fn ac2_gate_allows_stop_in_all_four_state_combinations() {
+        // decide.rs covered three of the four armed x target
+        // combinations; the armed-without-a-target corner completes
+        // the gate matrix, at both ceiling edges.
+        for armed in [false, true] {
+            for target_configured in [false, true] {
+                for ceiling in [0, 20] {
+                    let snapshot = GateSnapshot {
+                        armed,
+                        target_configured,
+                        ceiling,
+                    };
+                    let Decision::Allow { body, .. } = decide(&snapshot, &OutputIntent::Stop)
+                    else {
+                        panic!(
+                            "stop denied for armed={armed} target={target_configured} \
+                             ceiling={ceiling}"
+                        );
+                    };
+                    assert_eq!(body["action"], "Stop");
+                    assert_eq!(body["timeSec"], 0);
+                }
+            }
+        }
+    }
+
+    // --- heartbeat states ---------------------------------------------
+
+    #[test]
+    fn ac2_heartbeat_healthy_keeps_output_and_stop_is_next() {
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        // Inside the 5 s window: no trip, output survives.
+        server.lock_state().backdate_activity(4);
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 0);
+        assert_eq!(
+            status["output_active"], true,
+            "a healthy heartbeat must not zero early"
+        );
+        assert_eq!(sent.lock().unwrap().len(), 1, "no zero was sent early");
+        // A fresh sign of life, then stop on the usual terms.
+        server.lock_state().note_activity();
+        assert_stop_zeroes(&server, &sent, 1, "heartbeat healthy");
+    }
+
+    #[test]
+    fn ac2_heartbeat_loss_zeroes_with_no_further_call_then_stop_still_works() {
+        // The timer path (service.rs polls `trip_watchdog`): silence
+        // alone stops the device — heartbeat loss MUST stop it, with
+        // no tool call involved.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        server.lock_state().backdate_activity(6);
+        assert!(
+            server.trip_watchdog(),
+            "the watchdog must trip on heartbeat loss"
+        );
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 2);
+            assert_eq!(
+                sent[1]["action"], "Stop",
+                "heartbeat loss sends the wire zero"
+            );
+        }
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["output_active"], false);
+        assert_eq!(status["armed"], false);
+        // And after the trip, an explicit stop is still available.
+        assert_stop_zeroes(&server, &sent, 2, "after watchdog trip");
+        assert_eq!(
+            status_of(&server)["watchdog_trips"],
+            1,
+            "stop does not re-trip"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_as_first_call_after_heartbeat_loss_is_not_swallowed() {
+        // Dispatch trips an expired watchdog BEFORE routing any
+        // call. When that call is itself lovense_stop, the trip must
+        // not consume or replace it: the trip's best-effort zero and
+        // the stop's own synchronous zero both land, in that order,
+        // and stop answers as a success.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        server.lock_state().backdate_activity(6);
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(started.elapsed() < STOP_BOUND);
+        assert!(!is_error, "stop after heartbeat loss must not be refused");
+        assert_eq!(stopped["stop_sent"], true);
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 3, "function, watchdog zero, stop zero");
+            assert_eq!(sent[1]["action"], "Stop");
+            assert_eq!(sent[2]["action"], "Stop");
+        }
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["output_active"], false);
+    }
+
+    // --- degraded and unconfigured states ------------------------------
+
+    #[test]
+    fn ac2_stop_after_session_drop_is_not_gated_by_degradation() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fail = mock.fail_flag();
+        let server = Server::new(Config::default(), Some(Box::new(mock)));
+        arm(&server);
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let args =
+            json!({"features": "v", "interval_ms": 400, "strengths": [10, 10], "time_sec": 30});
+        let (error, is_error) = payload(&call(&server, "lovense_pattern", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unreachable");
+        // The transport recovers; the session stays degraded. A
+        // degraded session is exactly when a caller reaches for
+        // stop — degradation must not gate it.
+        fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(status_of(&server)["session_health"], "degraded");
+        assert_stop_zeroes(&server, &sent, 2, "after session drop (degraded)");
+        assert_eq!(
+            status_of(&server)["session_health"],
+            "degraded",
+            "stop works in a degraded session; it does not silently heal it"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_with_no_target_is_a_local_zero_not_a_refusal() {
+        // Real transport, no host: nothing can reach any wire. Arm
+        // is refused (no target), but stop is not gated on a target
+        // existing — it zeroes locally, reports honestly that no
+        // zero could be sent, and succeeds.
+        let config = Config {
+            transport: TransportKind::Real,
+            host: String::new(),
+            ..Config::default()
+        };
+        let transport = from_config(&config);
+        assert!(transport.is_none(), "no host means no transport");
+        let server = Server::new(config, transport);
+        let (error, is_error) = payload(&call(&server, "lovense_arm", json!({})));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unconfigured");
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(started.elapsed() < STOP_BOUND);
+        assert!(!is_error, "stop with no target must not be refused");
+        assert_eq!(
+            stopped["stop_sent"], false,
+            "no target: nothing could be sent"
+        );
+        assert_eq!(stopped["armed"], false);
+        assert_eq!(stopped["output_active"], false);
+        let status = status_of(&server);
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["output_active"], false);
+    }
+
+    // --- unified provider states ----------------------------------------
+
+    #[test]
+    fn ac2_stop_zeroes_a_unified_buttplug_function_session() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let server =
+            Server::new(Config::default(), Some(Box::new(mock))).with_buttplug(Box::new(fake));
+        arm(&server);
+        let args =
+            json!({"feature": "Vibrate", "strength": 8, "time_sec": 30, "device": "buttplug:0"});
+        let (_, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(!is_error);
+        assert_eq!(*zeros.lock().unwrap(), 0, "no zero before stop");
+        // The Lovense half of the oracle still applies (stop zeroes
+        // BOTH providers synchronously); the Buttplug half is the
+        // zero count.
+        assert_stop_zeroes(&server, &sent, 0, "unified buttplug function");
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the buttplug provider was zeroed by stop"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_cancels_a_unified_buttplug_pattern() {
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let cancelled = fake.pattern_cancelled_flag();
+        let server = Server::new(Config::default(), Some(Box::new(MockTransport::new())))
+            .with_buttplug(Box::new(fake));
+        arm(&server);
+        let args = json!({
+            "features": "v", "interval_ms": 400, "strengths": [10, 10],
+            "time_sec": 30, "device": "buttplug:0"
+        });
+        let (_, is_error) = payload(&call(&server, "lovense_pattern", args));
+        assert!(!is_error);
+        assert!(!*cancelled.lock().unwrap(), "the pattern is still running");
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        assert_eq!(stopped["stop_sent"], true);
+        assert!(*zeros.lock().unwrap() >= 1, "the provider was zeroed");
+        assert!(
+            *cancelled.lock().unwrap(),
+            "stop cancels the running pattern, it does not let it play out"
+        );
+        assert_eq!(status_of(&server)["output_active"], false);
+        assert_eq!(status_of(&server)["armed"], false);
+    }
+}
