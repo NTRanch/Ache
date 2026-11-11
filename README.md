@@ -3,6 +3,7 @@
 </p>
 
 # ache — unified haptics, by Nice Thoughts Ranch
+[![crates.io](https://img.shields.io/crates/v/ache.svg)](https://crates.io/crates/ache)
 
 Home of **ache**, Nice Thoughts Ranch's unified haptics MCP
 server, and of the Lovense integration work around it: the
