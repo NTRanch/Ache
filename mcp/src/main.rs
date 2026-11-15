@@ -1,8 +1,11 @@
-//! ache — the unified haptics MCP stdio server. One server, two
+//! ache — the unified haptics MCP stdio server. One server, three
 //! providers behind a seam: Lovense toys over the Standard API local
-//! Game Mode route, and Buttplug devices over an embedded in-process
-//! Buttplug server. Every output on either provider passes the pure
-//! `decide()` gate in `decide.rs` before it can reach a device.
+//! Game Mode route, Buttplug devices over an embedded in-process
+//! Buttplug server, and the opt-in Lovense Server API cloud route
+//! (step 4, D-1451; off by default, its developer token referenced
+//! by password-store path only). Every output on every provider
+//! passes the pure `decide()` gate in `decide.rs` before it can
+//! reach a device.
 //!
 //! The protocol layer is rmcp, modern era only (2026-07-28), behind
 //! the byte-level era guard in `guard.rs`, which owns the stdio
@@ -17,6 +20,7 @@ mod error;
 mod guard;
 mod provider;
 mod provider_buttplug;
+mod provider_server_api;
 mod server;
 mod service;
 mod state;
@@ -29,6 +33,7 @@ use std::sync::{Arc, Mutex};
 
 use config::{CONFIG_ENV, Config, TransportKind};
 use provider::{DeviceProvider, FakeButtplug, InertProvider, ProviderId};
+use provider_server_api::PairingProvider;
 use rmcp::ServiceExt;
 use server::Server;
 use service::AcheService;
@@ -51,7 +56,7 @@ fn main() -> ExitCode {
         },
     };
     eprintln!(
-        "ache {}: lovense transport {}, buttplug {}, unified output core (decide()-gated)",
+        "ache {}: lovense transport {}, buttplug {}, server api {}, unified output core (decide()-gated)",
         server::SERVER_VERSION,
         config.transport.as_str(),
         if config.buttplug_enabled {
@@ -59,10 +64,21 @@ fn main() -> ExitCode {
         } else {
             "disabled"
         },
+        if config.server_api_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
     );
     let transport = transport::from_config(&config);
     let buttplug = buttplug_provider(&config);
-    let server = Arc::new(Server::new(config, transport).with_buttplug(buttplug));
+    let (server_api, pairing) = server_api_provider(&config);
+    let server = Arc::new(
+        Server::new(config, transport)
+            .with_buttplug(buttplug)
+            .with_server_api(server_api)
+            .with_pairing(pairing),
+    );
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -152,5 +168,43 @@ fn buttplug_provider(config: &Config) -> Box<dyn DeviceProvider> {
         TransportKind::Real => Box::new(provider_buttplug::EmbeddedButtplug::start(
             config.buttplug_scan_ms,
         )),
+    }
+}
+
+/// Wire the Server API provider for a config (D-1451), mirroring
+/// `buttplug_provider`: the device provider and the pairing surface
+/// travel together. Disabled (the default) wires the inert provider
+/// and the refusing pairing surface — the bare `Server::new`
+/// posture, made explicit here. Mock mode gets the fixture (no
+/// network, no credential store). Real mode gets the cloud
+/// provider; its credentials load lazily from the password store on
+/// first use, never at startup, and never block serving.
+fn server_api_provider(config: &Config) -> (Box<dyn DeviceProvider>, Box<dyn PairingProvider>) {
+    if !config.server_api_enabled {
+        return (
+            Box::new(InertProvider::disabled(
+                ProviderId::ServerApi,
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
+            )),
+            Box::new(provider_server_api::NoPairing::disabled(
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
+            )),
+        );
+    }
+    match config.transport {
+        TransportKind::Mock => {
+            let fixture = provider_server_api::FakeServerApi::new();
+            (Box::new(fixture.clone()), Box::new(fixture))
+        }
+        TransportKind::Real => {
+            let provider = Arc::new(provider_server_api::ServerApiProvider::new(
+                config,
+                Box::new(provider_server_api::RealServerApiTransport::new()),
+                Box::new(provider_server_api::PassSecretSource),
+            ));
+            (Box::new(provider.clone()), Box::new(provider))
+        }
     }
 }

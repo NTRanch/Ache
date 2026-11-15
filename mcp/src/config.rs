@@ -21,6 +21,15 @@ pub const BUTTPLUG_SCAN_MS_MIN: u32 = 100;
 pub const BUTTPLUG_SCAN_MS_MAX: u32 = 10_000;
 /// Largest config file accepted, in bytes.
 pub const CONFIG_BYTES_MAX: u64 = 64 * 1024;
+/// Default password-store path of the Lovense developer token. The
+/// config names a path, never a value: credentials live in the
+/// password store and are loaded at runtime (D-1451).
+pub const SERVER_API_TOKEN_PASS_ENTRY_DEFAULT: &str = "lovense/ntr/token";
+/// Default password-store path of the paired user id, placed there
+/// by the Owner as the final step of QR pairing (D-1451).
+pub const SERVER_API_UID_PASS_ENTRY_DEFAULT: &str = "lovense/ntr/uid";
+/// Longest password-store path accepted, in bytes.
+pub const PASS_ENTRY_BYTES_MAX: usize = 128;
 /// Highest intensity the Lovense API accepts; also the default ceiling.
 pub const INTENSITY_CEILING_MAX: u8 = 20;
 pub const WATCHDOG_SECS_MIN: u8 = 1;
@@ -61,6 +70,15 @@ pub struct Config {
     pub buttplug_enabled: bool,
     /// How long one Buttplug discovery scan listens, in milliseconds.
     pub buttplug_scan_ms: u32,
+    /// Whether the Lovense Server API provider (the cloud route,
+    /// D-1451) runs at all. Default OFF: local routes are the default
+    /// and this provider is an explicit operator opt-in.
+    pub server_api_enabled: bool,
+    /// Password-store path of the developer token. A path, never a
+    /// value; the credential itself is loaded at runtime.
+    pub server_api_token_pass_entry: String,
+    /// Password-store path of the paired user id.
+    pub server_api_uid_pass_entry: String,
 }
 
 impl Default for Config {
@@ -74,6 +92,9 @@ impl Default for Config {
             watchdog_secs: WATCHDOG_SECS_DEFAULT,
             buttplug_enabled: true,
             buttplug_scan_ms: BUTTPLUG_SCAN_MS_DEFAULT,
+            server_api_enabled: false,
+            server_api_token_pass_entry: SERVER_API_TOKEN_PASS_ENTRY_DEFAULT.to_string(),
+            server_api_uid_pass_entry: SERVER_API_UID_PASS_ENTRY_DEFAULT.to_string(),
         }
     }
 }
@@ -90,6 +111,7 @@ struct RawConfig {
     intensity_ceiling: Option<i64>,
     watchdog_secs: Option<i64>,
     buttplug: Option<RawButtplug>,
+    server_api: Option<RawServerApi>,
 }
 
 /// The `[buttplug]` section: the embedded Buttplug provider's knobs.
@@ -99,6 +121,18 @@ struct RawConfig {
 struct RawButtplug {
     enabled: Option<bool>,
     scan_ms: Option<i64>,
+}
+
+/// The `[server_api]` section: the Server API provider's knobs
+/// (D-1451). It can name password-store paths only — a credential
+/// value has no field to land in, and an unknown key (a stray
+/// `token = "..."` above all) refuses the whole config.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawServerApi {
+    enabled: Option<bool>,
+    token_pass_entry: Option<String>,
+    uid_pass_entry: Option<String>,
 }
 
 impl Config {
@@ -160,6 +194,29 @@ impl Config {
                 )
             }
         };
+        let (server_api_enabled, server_api_token_pass_entry, server_api_uid_pass_entry) =
+            match raw.server_api {
+                None => (
+                    defaults.server_api_enabled,
+                    defaults.server_api_token_pass_entry.clone(),
+                    defaults.server_api_uid_pass_entry.clone(),
+                ),
+                Some(section) => {
+                    let token_entry = match section.token_pass_entry {
+                        None => defaults.server_api_token_pass_entry.clone(),
+                        Some(entry) => validate_pass_entry("server_api.token_pass_entry", entry)?,
+                    };
+                    let uid_entry = match section.uid_pass_entry {
+                        None => defaults.server_api_uid_pass_entry.clone(),
+                        Some(entry) => validate_pass_entry("server_api.uid_pass_entry", entry)?,
+                    };
+                    (
+                        section.enabled.unwrap_or(defaults.server_api_enabled),
+                        token_entry,
+                        uid_entry,
+                    )
+                }
+            };
         Ok(Config {
             transport,
             host,
@@ -169,6 +226,9 @@ impl Config {
             watchdog_secs,
             buttplug_enabled,
             buttplug_scan_ms,
+            server_api_enabled,
+            server_api_token_pass_entry,
+            server_api_uid_pass_entry,
         })
     }
 
@@ -228,6 +288,29 @@ fn validate_host(host: String) -> Result<String> {
         );
     }
     Ok(host)
+}
+
+/// A password-store path is a relative entry name: ASCII letters,
+/// digits, `/`, `-`, `_`, and `.` only, never absolute, never with a
+/// `..` component, never empty. That excludes traversal out of the
+/// store and anything that could be mistaken for a credential value
+/// with whitespace or punctuation in it.
+fn validate_pass_entry(field: &str, entry: String) -> Result<String> {
+    if entry.is_empty() || entry.len() > PASS_ENTRY_BYTES_MAX {
+        return invalid(field, format!("must be 1..={PASS_ENTRY_BYTES_MAX} bytes"));
+    }
+    let allowed =
+        |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.');
+    if !entry.bytes().all(allowed)
+        || entry.starts_with('/')
+        || entry.split('/').any(|part| part.is_empty() || part == "..")
+    {
+        return invalid(
+            field,
+            format!("`{entry}` must be a relative password-store path"),
+        );
+    }
+    Ok(entry)
 }
 
 fn invalid<T>(field: &str, reason: impl AsRef<str>) -> Result<T> {
@@ -302,6 +385,34 @@ mod tests {
         assert_eq!(config.buttplug_scan_ms, BUTTPLUG_SCAN_MS_DEFAULT);
         let config = Config::from_toml_str("").unwrap();
         assert!(config.buttplug_enabled, "the provider is on by default");
+    }
+
+    #[test]
+    fn server_api_section_defaults_off_with_store_paths() {
+        // The D-1451 posture: off by default, local routes default;
+        // the section names password-store paths, never values.
+        let config = Config::from_toml_str("").unwrap();
+        assert!(!config.server_api_enabled);
+        assert_eq!(
+            config.server_api_token_pass_entry,
+            SERVER_API_TOKEN_PASS_ENTRY_DEFAULT
+        );
+        assert_eq!(
+            config.server_api_uid_pass_entry,
+            SERVER_API_UID_PASS_ENTRY_DEFAULT
+        );
+        let config = Config::from_toml_str("[server_api]\n").unwrap();
+        assert!(!config.server_api_enabled, "an empty section stays off");
+        let config = Config::from_toml_str(
+            "[server_api]\nenabled = true\ntoken_pass_entry = \"lovense/dev/token\"\n",
+        )
+        .unwrap();
+        assert!(config.server_api_enabled);
+        assert_eq!(config.server_api_token_pass_entry, "lovense/dev/token");
+        assert_eq!(
+            config.server_api_uid_pass_entry,
+            SERVER_API_UID_PASS_ENTRY_DEFAULT
+        );
     }
 
     #[test]
@@ -403,6 +514,47 @@ mod tests {
                 .contains("buttplug.scan_ms")
         );
         refused("[buttplug]\nenabled = \"yes\"");
+    }
+
+    #[test]
+    fn server_api_section_is_fail_closed_too() {
+        // A credential value has nowhere to land: `token` is an
+        // unknown key here and refuses the config outright (D-1451:
+        // the token lives in the password store, never in config).
+        assert!(
+            refused("[server_api]\ntoken = \"x\"")
+                .message
+                .contains("token")
+        );
+        assert!(refused("[server_api]\nuid = \"x\"").message.contains("uid"));
+        refused("[server_api]\nenabled = \"yes\"");
+        refused("[server_api]\nenabled = 1");
+    }
+
+    #[test]
+    fn server_api_pass_entries_cannot_escape_the_store() {
+        for entry in [
+            "/etc/passwd",
+            "../secret",
+            "lovense/../secret",
+            "lovense//token",
+            "lovense/token ",
+            "lovense\\token",
+            "lovense/token\n",
+            "",
+        ] {
+            let text = format!("[server_api]\ntoken_pass_entry = {}", toml_string(entry));
+            assert!(
+                refused(&text)
+                    .message
+                    .contains("server_api.token_pass_entry"),
+                "entry {entry:?}"
+            );
+        }
+        refused(&format!(
+            "[server_api]\nuid_pass_entry = \"{}\"",
+            "a/".repeat(70)
+        ));
     }
 
     #[test]

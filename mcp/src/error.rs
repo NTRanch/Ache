@@ -31,6 +31,12 @@ pub enum ErrorCode {
     CapabilityUnsupported,
     /// A unified device id names no device any provider can see.
     DeviceNotFound,
+    /// A credential the configuration names by password-store path
+    /// could not be loaded: the store entry is absent, the store is
+    /// locked, or the lookup failed. The credential's value is never
+    /// part of the error; the path that failed is configuration, not
+    /// a secret, and is named so the operator can repair custody.
+    SecretUnavailable,
 }
 
 impl ErrorCode {
@@ -48,14 +54,16 @@ impl ErrorCode {
             ErrorCode::ProviderUnavailable => "provider_unavailable",
             ErrorCode::CapabilityUnsupported => "capability_unsupported",
             ErrorCode::DeviceNotFound => "device_not_found",
+            ErrorCode::SecretUnavailable => "secret_unavailable",
         }
     }
 
     pub fn class(self) -> &'static str {
         match self {
-            ErrorCode::ConfigMissing | ErrorCode::ConfigUnreadable | ErrorCode::ConfigInvalid => {
-                "configuration"
-            }
+            ErrorCode::ConfigMissing
+            | ErrorCode::ConfigUnreadable
+            | ErrorCode::ConfigInvalid
+            | ErrorCode::SecretUnavailable => "configuration",
             ErrorCode::TargetUnconfigured
             | ErrorCode::CapabilityUnsupported
             | ErrorCode::DeviceNotFound => "target",

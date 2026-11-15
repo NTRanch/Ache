@@ -1,14 +1,15 @@
-//! The provider seam: two device providers behind one trait, in the
+//! The provider seam: three device providers behind one trait, in the
 //! estate's provider pattern — a read side (a pure probe, discovery)
 //! and an output side that executes exactly one thing, a
 //! [`AllowedOutput`] plan the `decide()` gate constructed and allowed.
 //! No provider sees a raw intent, no provider validates on its own, and
 //! no caller assembles a provider command: the gate is the single
-//! choke point for both providers, which is what makes the safety
+//! choke point for every provider, which is what makes the safety
 //! contract's cross-provider parity structural rather than promised.
 //!
 //! The unified device model lives here too: a device is data — an id
-//! namespaced by its provider (`lovense:<toy id>`, `buttplug:<index>`),
+//! namespaced by its provider (`lovense:<toy id>`, `buttplug:<index>`,
+//! `serverapi:<toy id>`),
 //! a name, and its capabilities as reported values, each either mapped
 //! onto the unified feature vocabulary (with its maximum on the
 //! unified 0..=20 strength scale) or carried as provider-native data
@@ -33,6 +34,9 @@ use crate::transport::{Toy, Transport};
 pub enum ProviderId {
     Lovense,
     Buttplug,
+    /// The Lovense Server API provider (D-1451): the cloud route,
+    /// opt-in and off by default, behind the same gate.
+    ServerApi,
 }
 
 impl ProviderId {
@@ -40,6 +44,7 @@ impl ProviderId {
         match self {
             ProviderId::Lovense => "lovense",
             ProviderId::Buttplug => "buttplug",
+            ProviderId::ServerApi => "serverapi",
         }
     }
 }
@@ -166,7 +171,8 @@ impl Capability {
 /// One device in the unified model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
-    /// Unified id: `lovense:<toy id>` or `buttplug:<index>`.
+    /// Unified id: `lovense:<toy id>`, `buttplug:<index>`, or
+    /// `serverapi:<toy id>`.
     pub id: String,
     pub provider: ProviderId,
     pub name: String,
@@ -248,7 +254,11 @@ impl Device {
     }
 
     /// The gate's view of this device: mapped capabilities only, plus
-    /// preset support (a Lovense-only capability).
+    /// preset support. Presets are a Lovense-vocabulary capability:
+    /// the local route and the Server API route both carry the
+    /// documented Function/Pattern/Preset vocabulary (evidence:
+    /// COVERAGE-MATRIX.md [L], Lovense Standard Solutions), so both
+    /// Lovense providers support them; Buttplug does not.
     #[must_use]
     pub fn caps(&self) -> TargetCaps {
         TargetCaps::new(
@@ -256,7 +266,7 @@ impl Device {
                 .iter()
                 .filter_map(|cap| cap.max.map(|max| (cap.feature.clone(), max)))
                 .collect(),
-            self.provider == ProviderId::Lovense,
+            matches!(self.provider, ProviderId::Lovense | ProviderId::ServerApi),
         )
     }
 }

@@ -1,16 +1,18 @@
-//! The tool surface and dispatch core. Eleven tools. The original eight
+//! The tool surface and dispatch core. Twelve tools. The original eight
 //! (`lovense_*`) keep their names and shapes: two read-only (status,
 //! toys) and six for the output core (arm, disarm, function, pattern,
 //! preset, stop). Two unified read-only tools (`ache_devices`,
-//! `ache_device`) enumerate devices across both providers — the
-//! Lovense Standard API provider and the embedded Buttplug provider —
-//! with capabilities as data; the output tools route to either
-//! provider when given a unified `device` id. Every output, on either
-//! provider, passes the one `decide()` gate in `decide.rs` before
-//! anything can reach a device. Protocol misuse (bad arguments) is a
-//! JSON-RPC error; an operational failure (no target, unreachable app,
-//! a gate deny) is a tool result with `isError: true` and the
-//! structured error as its text.
+//! `ache_device`) enumerate devices across every provider — the
+//! Lovense Standard API provider, the embedded Buttplug provider, and
+//! the opt-in Server API provider (D-1451) — with capabilities as
+//! data; the output tools route to any provider when given a unified
+//! `device` id. `ache_pairing` serves the Server API provider's
+//! pairing surface (state, and an explicit QR request); it can cause
+//! no output. Every output, on any provider, passes the one
+//! `decide()` gate in `decide.rs` before anything can reach a device.
+//! Protocol misuse (bad arguments) is a JSON-RPC error; an operational
+//! failure (no target, unreachable app, a gate deny) is a tool result
+//! with `isError: true` and the structured error as its text.
 //!
 //! The wire itself is no longer hand-rolled here: the era guard
 //! (`guard.rs`) owns the framing contract and the rmcp service
@@ -30,6 +32,7 @@ use crate::decide::{
 };
 use crate::error::{AcheError, ErrorCode};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
+use crate::provider_server_api::{NoPairing, PairingProvider};
 use crate::state::SafetyState;
 use crate::transport::Transport;
 
@@ -43,7 +46,7 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// Every tool the server serves, in `tools/list` order. The original
 /// eight keep their positions; the unified tools append.
-pub(crate) const TOOL_NAMES: [&str; 11] = [
+pub(crate) const TOOL_NAMES: [&str; 12] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -55,6 +58,7 @@ pub(crate) const TOOL_NAMES: [&str; 11] = [
     "ache_devices",
     "ache_device",
     "ache_score_start",
+    "ache_pairing",
 ];
 
 pub struct Server {
@@ -66,9 +70,17 @@ pub struct Server {
     /// The Buttplug provider: embedded in production, a fixture in mock
     /// mode, or inert (disabled / not wired by a bare constructor).
     buttplug: Arc<dyn DeviceProvider>,
+    /// The Server API provider (D-1451): the cloud route, inert unless
+    /// the operator enabled it in config and production wiring
+    /// replaced it. Inert is its default state in every sense.
+    server_api: Arc<dyn DeviceProvider>,
+    /// The Server API pairing surface, wired alongside the provider:
+    /// a `NoPairing` (refusing, state-reporting) instance whenever the
+    /// provider is disabled or unwired.
+    pairing: Arc<dyn PairingProvider>,
     /// The safety state machine: arm latch, output activity, watchdog
     /// bookkeeping, session health. One state for the whole server —
-    /// the master toggle and the watchdog govern both providers.
+    /// the master toggle and the watchdog govern every provider.
     state: Arc<Mutex<SafetyState>>,
     output_lock: Arc<Mutex<()>>,
     score: Mutex<Option<Arc<ScoreRun>>>,
@@ -100,10 +112,10 @@ impl From<(i64, String)> for CallError {
 }
 
 impl Server {
-    /// A server with the Lovense provider wired; the Buttplug
-    /// provider is present in the surface but inert until
-    /// [`Server::with_buttplug`] replaces it (production wiring in
-    /// `main` always does).
+    /// A server with the Lovense provider wired; the Buttplug and
+    /// Server API providers are present in the surface but inert
+    /// until [`Server::with_buttplug`] / [`Server::with_server_api`]
+    /// replace them (production wiring in `main` always does).
     pub fn new(config: Config, transport: Option<Box<dyn Transport>>) -> Server {
         let lovense = LovenseProvider::new(&config, transport);
         Server {
@@ -112,6 +124,15 @@ impl Server {
             buttplug: Arc::new(InertProvider::unavailable(
                 ProviderId::Buttplug,
                 "no buttplug provider is wired in this server",
+            )),
+            server_api: Arc::new(InertProvider::disabled(
+                ProviderId::ServerApi,
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
+            )),
+            pairing: Arc::new(NoPairing::disabled(
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
             )),
             state: Arc::new(Mutex::new(SafetyState::new())),
             output_lock: Arc::new(Mutex::new(())),
@@ -126,6 +147,20 @@ impl Server {
         self
     }
 
+    /// Wire the Server API provider behind the seam (D-1451).
+    #[must_use]
+    pub fn with_server_api(mut self, server_api: Box<dyn DeviceProvider>) -> Server {
+        self.server_api = Arc::from(server_api);
+        self
+    }
+
+    /// Wire the Server API pairing surface alongside its provider.
+    #[must_use]
+    pub fn with_pairing(mut self, pairing: Box<dyn PairingProvider>) -> Server {
+        self.pairing = Arc::from(pairing);
+        self
+    }
+
     fn lock_state(&self) -> MutexGuard<'_, SafetyState> {
         // A poisoned lock only means a thread panicked mid-update; the
         // state value is still coherent, so keep serving.
@@ -134,12 +169,14 @@ impl Server {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Whether output could reach a target at all: either provider
+    /// Whether output could reach a target at all: any provider
     /// can accept output. The Lovense half is the original rule (a
-    /// transport exists and the config gate permits it); the Buttplug
-    /// half is its probe.
+    /// transport exists and the config gate permits it); the other
+    /// providers answer with their probes.
     fn target_configured(&self) -> bool {
-        self.lovense.target_configured() || self.buttplug.probe().available
+        self.lovense.target_configured()
+            || self.buttplug.probe().available
+            || self.server_api.probe().available
     }
 
     fn snapshot(&self) -> crate::decide::GateSnapshot {
@@ -210,6 +247,12 @@ impl Server {
                 check_fields_allowed(&args, &["device"])?;
                 let device = required_string(&args, "device")?;
                 Ok(self.device(&device)?)
+            }
+            "ache_pairing" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["action"])?;
+                let action = required_string(&args, "action")?;
+                Ok(self.pairing(&action)?)
             }
             "lovense_function" => {
                 let args = arguments_object(arguments)?;
@@ -296,11 +339,12 @@ impl Server {
             "watchdog_secs": self.config.watchdog_secs,
             "output_path": "gated: every output on every provider passes the one \
                 decide() gate; stop, disarm, the watchdog, a session drop, and \
-                shutdown each zero output on both providers and latch the master off",
+                shutdown each zero output on every provider and latch the master off",
             "note": note,
             "providers": {
                 "lovense": self.lovense.probe().to_json(),
                 "buttplug": self.buttplug.probe().to_json(),
+                "serverapi": self.server_api.probe().to_json(),
             },
             "server": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
@@ -336,6 +380,7 @@ impl Server {
         for provider in [
             self.lovense.as_ref() as &dyn DeviceProvider,
             self.buttplug.as_ref() as &dyn DeviceProvider,
+            self.server_api.as_ref() as &dyn DeviceProvider,
         ] {
             let probe = provider.probe();
             let mut entry = Map::new();
@@ -371,6 +416,33 @@ impl Server {
         Ok(self.resolve_device(id)?.to_json())
     }
 
+    /// The Server API pairing surface (D-1451). `status` presents
+    /// pairing state — presence only, never a credential value.
+    /// `request_qr` is the explicit operator act that asks Lovense
+    /// for a QR code for the Owner to scan in the Remote app; it
+    /// pairs nothing itself and can cause no device output. The
+    /// provider's config enablement is the approval boundary: a
+    /// disabled provider's pairing surface refuses both actions.
+    fn pairing(&self, action: &str) -> Result<Value, AcheError> {
+        match action {
+            "status" => Ok(self.pairing.pairing_state().to_json()),
+            "request_qr" => {
+                let qr = self.pairing.request_qr()?;
+                Ok(json!({
+                    "qr": qr.to_json(),
+                    "note": "scan this code in Lovense Remote to pair; pairing \
+                        completes in the app, and the resulting user id is placed \
+                        in the password store at the configured uid entry as the \
+                        final step",
+                }))
+            }
+            other => Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                format!("pairing action {other:?} must be `status` or `request_qr`"),
+            )),
+        }
+    }
+
     /// Resolve a unified device id to the device, asking only the
     /// provider the id names. A provider that cannot enumerate
     /// surfaces its own typed error — absence is never claimed on the
@@ -388,10 +460,14 @@ impl Server {
             self.lovense.as_ref()
         } else if id.starts_with("buttplug:") {
             self.buttplug.as_ref()
+        } else if id.starts_with("serverapi:") {
+            self.server_api.as_ref()
         } else {
             return Err(AcheError::new(
                 ErrorCode::RequestInvalid,
-                format!("device id {id:?} must start with `lovense:` or `buttplug:`"),
+                format!(
+                    "device id {id:?} must start with `lovense:`, `buttplug:`, or `serverapi:`"
+                ),
             ));
         };
         let devices = provider.discover()?;
@@ -466,35 +542,39 @@ impl Server {
         Ok(sent)
     }
 
-    /// Zero every provider. Both providers are ALWAYS attempted, even
-    /// when the first fails: a panic stop that leaves the second
+    /// Zero every provider. All providers are ALWAYS attempted, even
+    /// when the first fails: a panic stop that leaves another
     /// provider running because the first one's send failed is not a
     /// stop. `Ok(false)` means no provider had a target to zero: the
-    /// local zero still stands. A zero failure on either provider
+    /// local zero still stands. A zero failure on any provider
     /// marks the session dropped; the first failure is the error.
     fn send_stop_strict(&self) -> Result<bool, AcheError> {
         self.cancel_score();
         let lovense = self.lovense.zero();
         let buttplug = self.buttplug.zero();
-        match (lovense, buttplug) {
-            (Ok(lovense_sent), Ok(buttplug_sent)) => Ok(lovense_sent || buttplug_sent),
-            (Err(error), _) | (_, Err(error)) => {
+        let server_api = self.server_api.zero();
+        match (lovense, buttplug, server_api) {
+            (Ok(lovense_sent), Ok(buttplug_sent), Ok(server_api_sent)) => {
+                Ok(lovense_sent || buttplug_sent || server_api_sent)
+            }
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                 self.lock_state().on_session_drop();
                 Err(error)
             }
         }
     }
 
-    /// Best-effort zero on both providers, for the paths that must
+    /// Best-effort zero on every provider, for the paths that must
     /// never fail: a watchdog trip, shutdown, recovery after a drop.
-    /// Both are attempted even when one fails (never short-circuited).
+    /// All are attempted even when one fails (never short-circuited).
     /// State has already been zeroed by the caller; a failure here
     /// means the session is gone and is recorded as a drop.
     fn send_stop_best_effort(&self) {
         self.cancel_score();
         let lovense_failed = self.lovense.zero().is_err();
         let buttplug_failed = self.buttplug.zero().is_err();
-        if lovense_failed || buttplug_failed {
+        let server_api_failed = self.server_api.zero().is_err();
+        if lovense_failed || buttplug_failed || server_api_failed {
             self.lock_state().on_session_drop();
         }
     }
@@ -507,7 +587,7 @@ impl Server {
     /// (`decide_plan`) and executed by the device's provider. A deny is
     /// final and sends nothing, on either path. A send failure is a
     /// session drop: output state zeroes, the master latches off, and a
-    /// best-effort zero on both providers follows the failed command.
+    /// best-effort zero on every provider follows the failed command.
     fn run_output(&self, intent: OutputIntent, device: Option<&str>) -> Result<Value, AcheError> {
         let _output = self.output_lock.lock().unwrap();
         if self.score_running() {
@@ -571,6 +651,19 @@ impl Server {
                     }),
                 )
             }
+            ProviderId::ServerApi => {
+                let effective = plan_effective(&plan);
+                self.finish_output(
+                    self.server_api.execute(&plan),
+                    json!({
+                        "sent": true,
+                        "provider": "serverapi",
+                        "device": target.id,
+                        "gate": { "decision": "allow", "clamped": clamped },
+                        "effective": effective,
+                    }),
+                )
+            }
         }
     }
 
@@ -601,6 +694,9 @@ impl Server {
             if let Ok(device) = self.resolve_device(&part.device) {
                 let selector = match device.provider {
                     ProviderId::Lovense => device.id.strip_prefix("lovense:").unwrap().to_string(),
+                    ProviderId::ServerApi => {
+                        device.id.strip_prefix("serverapi:").unwrap().to_string()
+                    }
                     ProviderId::Buttplug => device.id.clone(),
                 };
                 targets.push((device.id.clone(), selector, device.caps()));
@@ -635,12 +731,14 @@ impl Server {
             {
                 ProviderId::Lovense => self.lovense.clone(),
                 ProviderId::Buttplug => self.buttplug.clone(),
+                ProviderId::ServerApi => self.server_api.clone(),
             };
             let run = run.clone();
             let output_lock = self.output_lock.clone();
             let state = self.state.clone();
             let lovense = self.lovense.clone();
             let buttplug = self.buttplug.clone();
+            let server_api = self.server_api.clone();
             // One independently waiting stream per device. Only sends are
             // serialized; no stream owns the lock during its duration.
             let spawned = std::thread::Builder::new()
@@ -667,6 +765,7 @@ impl Server {
                                 state.lock().unwrap().on_session_drop();
                                 let _ = lovense.zero();
                                 let _ = buttplug.zero();
+                                let _ = server_api.zero();
                                 return;
                             }
                         }
@@ -702,6 +801,7 @@ impl Server {
                         state.lock().unwrap().on_session_drop();
                         let _ = lovense.zero();
                         let _ = buttplug.zero();
+                        let _ = server_api.zero();
                         return;
                     }
                     let mut remaining = run.remaining.lock().unwrap();
@@ -788,6 +888,11 @@ fn retarget(intent: OutputIntent, device: &Device) -> OutputIntent {
         ProviderId::Lovense => device
             .id
             .strip_prefix("lovense:")
+            .unwrap_or(&device.id)
+            .to_string(),
+        ProviderId::ServerApi => device
+            .id
+            .strip_prefix("serverapi:")
             .unwrap_or(&device.id)
             .to_string(),
         ProviderId::Buttplug => device.id.clone(),
@@ -1065,8 +1170,8 @@ pub(crate) fn tool_list() -> Value {
         },
         {
             "name": "lovense_stop",
-            "description": "Panic zero: stop every function on every device on both \
-                providers, synchronously, and latch the master off so recovery is a \
+            "description": "Panic zero: stop every function on every device on every \
+                provider, synchronously, and latch the master off so recovery is a \
                 fresh explicit arm. Always available — disarmed, unconfigured, \
                 mid-pattern — and never gated.",
             "inputSchema": no_arguments.clone(),
@@ -1080,8 +1185,8 @@ pub(crate) fn tool_list() -> Value {
         },
         {
             "name": "ache_devices",
-            "description": "Discover every device across both providers (Lovense \
-                Standard API and embedded Buttplug), in one unified model: id, \
+            "description": "Discover every device across every provider (Lovense \
+                Standard API, embedded Buttplug, and the opt-in Server API), in one unified model: id, \
                 provider, name, battery, and capabilities as data — each capability \
                 carries its maximum on the unified 0..=20 strength scale, or null \
                 when the capability is reported but not mapped. A provider that \
@@ -1123,6 +1228,36 @@ pub(crate) fn tool_list() -> Value {
             },
         },
         score_tool,
+        {
+            "name": "ache_pairing",
+            "description": "Server API pairing surface (D-1451). action \"status\": report \
+                pairing state — whether the developer token and the paired user id are \
+                present in the password store (presence only, never a value). action \
+                \"request_qr\": ask Lovense for a QR code for the Owner to scan in the \
+                Remote app — an explicit act that pairs nothing by itself and can cause \
+                no device output. Pairing completes in the app; the resulting user id \
+                is placed in the password store as the final step. A disabled Server \
+                API provider refuses with provider_unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "request_qr"],
+                        "description": "The pairing action."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+            "annotations": {
+                "title": "Server API pairing",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": true,
+            },
+        },
     ])
 }
 
@@ -1234,7 +1369,7 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-/// Whether `name` is one of the ten served tools. The era guard
+/// Whether `name` is one of the twelve served tools. The era guard
 /// asks before forwarding a `tools/call`; dispatch trusts it.
 pub(crate) fn is_known_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
@@ -1310,7 +1445,7 @@ mod tests {
     // --- validation ---------------------------------------------------
 
     #[test]
-    fn tools_list_is_exactly_the_eleven_tools_with_full_schemas() {
+    fn tools_list_is_exactly_the_twelve_tools_with_full_schemas() {
         let listed = tool_list();
         let tools = listed.as_array().unwrap();
         let names: Vec<&str> = tools
@@ -2388,6 +2523,187 @@ mod tests {
         assert!(!is_error, "the legacy path keeps its historical reach");
         assert_eq!(sent.lock().unwrap().len(), 1);
     }
+
+    // --- step 4: the Server API provider (D-1451) --------------------
+
+    use crate::provider_server_api::FakeServerApi;
+
+    /// The wire bodies the fixture provider recorded, in order.
+    fn bodies(fixture: &FakeServerApi) -> Vec<Value> {
+        fixture.sent_log().lock().unwrap().clone()
+    }
+
+    /// Poll until the fixture records a body (score streams start
+    /// on their own threads), bounded so a broken stream fails the
+    /// test instead of hanging it.
+    fn wait_for_bodies(fixture: &FakeServerApi) {
+        for _ in 0..400 {
+            if !bodies(fixture).is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the fixture recorded no body within the bound");
+    }
+
+    fn server_with_fixture_server_api() -> (Server, FakeServerApi) {
+        let fixture = FakeServerApi::new();
+        let server = Server::new(Config::default(), Some(Box::new(MockTransport::new())))
+            .with_server_api(Box::new(fixture.clone()))
+            .with_pairing(Box::new(fixture.clone()));
+        (server, fixture)
+    }
+
+    #[test]
+    fn serverapi_disabled_by_default_reports_typed_and_blocks_nothing_else() {
+        let server = server_for(Config::default());
+        let status = status_of(&server);
+        assert_eq!(status["providers"]["serverapi"]["available"], false);
+        assert_eq!(status["providers"]["serverapi"]["state"], "disabled");
+        // Enumeration still succeeds through the other providers,
+        // with the disabled provider's typed error in its own entry.
+        let (devices, is_error) = payload(&call(&server, "ache_devices", json!({})));
+        assert!(!is_error);
+        assert_eq!(
+            devices["providers"]["serverapi"]["error"]["code"],
+            "provider_unavailable"
+        );
+        // Pairing refuses cleanly while disabled.
+        let (body, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "request_qr"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "provider_unavailable");
+    }
+
+    #[test]
+    fn serverapi_output_routes_through_the_gate_and_stop_zeroes_it() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 99, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(!is_error, "{body}");
+        assert_eq!(body["provider"], "serverapi");
+        assert_eq!(body["effective"]["strength"], 20);
+        assert_eq!(body["gate"]["clamped"], true);
+        {
+            let bodies = bodies(&fixture);
+            assert_eq!(bodies.len(), 1);
+            assert_eq!(bodies[0]["command"], "Function");
+            assert_eq!(bodies[0]["action"], "Vibrate:20");
+            assert_eq!(bodies[0]["toy"], "fixture-lush");
+            assert_eq!(bodies[0]["token"], "fixture-token");
+            assert_eq!(bodies[0]["uid"], "fixture-uid");
+        }
+        let (_, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.last().unwrap()["action"], "Stop");
+    }
+
+    #[test]
+    fn serverapi_pairing_status_and_qr_come_from_the_fixture() {
+        let (server, _fixture) = server_with_fixture_server_api();
+        let (state, is_error) =
+            payload(&call(&server, "ache_pairing", json!({"action": "status"})));
+        assert!(!is_error);
+        assert_eq!(state["provider"], "serverapi");
+        assert_eq!(state["token_present"], true);
+        assert_eq!(state["uid_present"], true);
+        assert_eq!(state["paired"], true);
+        assert_eq!(state["qr_issued"], false);
+        let (issued, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "request_qr"}),
+        ));
+        assert!(!is_error, "{issued}");
+        assert_eq!(issued["qr"]["code"], "000000");
+        let (state, _) = payload(&call(&server, "ache_pairing", json!({"action": "status"})));
+        assert_eq!(state["qr_issued"], true);
+    }
+
+    #[test]
+    fn adversarial_serverapi_output_while_disarmed_sends_nothing() {
+        let (server, fixture) = server_with_fixture_server_api();
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "not_armed");
+        assert!(bodies(&fixture).is_empty());
+    }
+
+    #[test]
+    fn adversarial_serverapi_send_failure_drops_session_and_still_zeroes() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        fixture
+            .fail_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "target_unreachable");
+        // The failed command still drove the zero onto the wire:
+        // the fixture recorded the function body, then the stop.
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[1]["action"], "Stop");
+        assert!(!server.lock_state().armed());
+    }
+
+    #[test]
+    fn adversarial_serverapi_pairing_refuses_unknown_actions_and_fields() {
+        let (server, _fixture) = server_with_fixture_server_api();
+        // An unknown action is an operational refusal: there is no
+        // "complete pairing" verb to smuggle a uid in through.
+        let (body, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "complete"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "request_invalid");
+        // Extra or missing fields are protocol misuse.
+        for args in [json!({"action": "status", "uid": "attacker"}), json!({})] {
+            let response = call(&server, "ache_pairing", args);
+            assert_eq!(response["error"]["code"], INVALID_PARAMS, "{response}");
+        }
+    }
+
+    #[test]
+    fn serverapi_score_part_streams_and_stops_with_the_ensemble() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        let (_, is_error) = payload(&call(
+            &server,
+            "ache_score_start",
+            json!({"parts": [{"device": "serverapi:fixture-lush",
+                "segments": [{"action": "Vibrate", "level": 5, "duration": 30}]}]}),
+        ));
+        assert!(!is_error);
+        wait_for_bodies(&fixture);
+        assert_eq!(bodies(&fixture)[0]["command"], "Function");
+        assert_eq!(bodies(&fixture)[0]["action"], "Vibrate:5");
+        let (_, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.last().unwrap()["action"], "Stop");
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -3109,7 +3425,7 @@ mod score_tests {
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["parts"][0]["segments"][0]["effective"]["strength"], 2);
         assert_eq!(body["parts"][0]["segments"][0]["clamped"], true);
-        assert_eq!(TOOL_NAMES.len(), 11);
+        assert_eq!(TOOL_NAMES.len(), 12);
         server.stop().unwrap();
         assert_zeroed(&fixture);
     }
