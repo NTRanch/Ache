@@ -119,3 +119,15 @@ they matter only if a standalone app enters the roadmap.
 - Whether the Standard API Game Mode route formally requires a
   developer token: docs observed to describe no token for the local
   route, but never say so explicitly.
+
+## Toy Events candidate — step 2 (2026-11-13)
+
+origin_lane: ntranch; content_label: nsfw
+Evidence: dispatch COVERAGE-MATRIX.md verdict 4, [S] https://lovense.store/
+and [A] https://github.com/koval01/lovensepy/blob/HEAD/docs/appendix.en.md.
+
+Glint and Mission 2 touch-sense, and Calor's depth sensor, are input-direction
+candidates for a later Toy Events investigation. The cited event vocabulary
+includes toy-list, button and strength-changed events; emission of touch/depth
+events by these models remains UNVERIFIED. They are not output capabilities.
+No event subscription or consumption is built in step 2.

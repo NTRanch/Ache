@@ -154,6 +154,7 @@ fn stdio_smoke_over_mock_transport() {
             "lovense_stop",
             "ache_devices",
             "ache_device",
+            "ache_score_start",
         ]
     );
     // Status: mock, disarmed, nothing active.

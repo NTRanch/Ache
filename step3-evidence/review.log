@@ -1,0 +1,7 @@
+origin_lane: ntranch; content_label: nsfw; evidence: git status/diff, final-gates.log
+Final cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt -- --check: exit 0
+git diff --check: exit 0
+Inherited DOCS-NOTES.md, provider.rs, provider_buttplug.rs patches: byte-identical to initial snapshot
+Source checkout porcelain before and after: empty; unchanged
+New tests: 10 validation + 10 adversarial = 20; all observed passing in final-gates.log
+Branch: step3-score; HEAD c4b9612edfac2b7bc4180b5ed6d9eea14867358a; no commits or pushes

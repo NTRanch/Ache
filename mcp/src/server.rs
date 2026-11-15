@@ -1,4 +1,4 @@
-//! The tool surface and dispatch core. Ten tools. The original eight
+//! The tool surface and dispatch core. Eleven tools. The original eight
 //! (`lovense_*`) keep their names and shapes: two read-only (status,
 //! toys) and six for the output core (arm, disarm, function, pattern,
 //! preset, stop). Two unified read-only tools (`ache_devices`,
@@ -18,14 +18,15 @@
 //! This module owns what neither may touch: the handlers, the tool
 //! definitions (served raw, unchanged), and the safety state.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
 use crate::config::{Config, TransportKind};
 use crate::decide::{
     AllowedOutput, Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent,
-    TOY_ID_BYTES_MAX, decide, decide_plan, lovense_wire,
+    ScorePart, TOY_ID_BYTES_MAX, decide, decide_plan, decide_score, lovense_wire,
 };
 use crate::error::{AcheError, ErrorCode};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
@@ -42,7 +43,7 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// Every tool the server serves, in `tools/list` order. The original
 /// eight keep their positions; the unified tools append.
-pub(crate) const TOOL_NAMES: [&str; 10] = [
+pub(crate) const TOOL_NAMES: [&str; 11] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -53,6 +54,7 @@ pub(crate) const TOOL_NAMES: [&str; 10] = [
     "lovense_stop",
     "ache_devices",
     "ache_device",
+    "ache_score_start",
 ];
 
 pub struct Server {
@@ -60,14 +62,22 @@ pub struct Server {
     /// The Lovense provider. Its transport is `None` exactly when the
     /// config names the real transport without a host; then nothing can
     /// reach the Lovense wire.
-    lovense: LovenseProvider,
+    lovense: Arc<LovenseProvider>,
     /// The Buttplug provider: embedded in production, a fixture in mock
     /// mode, or inert (disabled / not wired by a bare constructor).
-    buttplug: Box<dyn DeviceProvider>,
+    buttplug: Arc<dyn DeviceProvider>,
     /// The safety state machine: arm latch, output activity, watchdog
     /// bookkeeping, session health. One state for the whole server —
     /// the master toggle and the watchdog govern both providers.
-    state: Mutex<SafetyState>,
+    state: Arc<Mutex<SafetyState>>,
+    output_lock: Arc<Mutex<()>>,
+    score: Mutex<Option<Arc<ScoreRun>>>,
+}
+
+struct ScoreRun {
+    cancelled: Mutex<bool>,
+    wake: Condvar,
+    remaining: Mutex<usize>,
 }
 
 /// A tool dispatch failure: protocol misuse is answered with a JSON-RPC
@@ -98,19 +108,21 @@ impl Server {
         let lovense = LovenseProvider::new(&config, transport);
         Server {
             config,
-            lovense,
-            buttplug: Box::new(InertProvider::unavailable(
+            lovense: Arc::new(lovense),
+            buttplug: Arc::new(InertProvider::unavailable(
                 ProviderId::Buttplug,
                 "no buttplug provider is wired in this server",
             )),
-            state: Mutex::new(SafetyState::new()),
+            state: Arc::new(Mutex::new(SafetyState::new())),
+            output_lock: Arc::new(Mutex::new(())),
+            score: Mutex::new(None),
         }
     }
 
     /// Wire the Buttplug provider behind the seam.
     #[must_use]
     pub fn with_buttplug(mut self, buttplug: Box<dyn DeviceProvider>) -> Server {
-        self.buttplug = buttplug;
+        self.buttplug = Arc::from(buttplug);
         self
     }
 
@@ -161,6 +173,14 @@ impl Server {
 
     fn dispatch(&self, name: &str, arguments: Option<&Value>) -> Result<Value, CallError> {
         match name {
+            "ache_score_start" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["parts"])?;
+                let parts: Vec<ScorePart> =
+                    serde_json::from_value(args.get("parts").cloned().unwrap_or(Value::Null))
+                        .map_err(|e| (INVALID_PARAMS, format!("invalid score parts: {e}")))?;
+                Ok(self.start_score(&parts)?)
+            }
             "lovense_status" => {
                 check_no_arguments(arguments)?;
                 Ok(self.status())
@@ -258,8 +278,12 @@ impl Server {
             ),
         };
         let target = probe.and_then(|probe| probe.target);
+        let score_running = self.score.lock().unwrap().as_ref().is_some_and(|run| {
+            !*run.cancelled.lock().unwrap() && *run.remaining.lock().unwrap() > 0
+        });
         let safety = self.lock_state();
         json!({
+            "score_running": score_running,
             "state": state,
             "transport": self.config.transport.as_str(),
             "target": target,
@@ -310,7 +334,7 @@ impl Server {
         let mut enumerated = false;
         let mut first_error: Option<AcheError> = None;
         for provider in [
-            &self.lovense as &dyn DeviceProvider,
+            self.lovense.as_ref() as &dyn DeviceProvider,
             self.buttplug.as_ref() as &dyn DeviceProvider,
         ] {
             let probe = provider.probe();
@@ -361,7 +385,7 @@ impl Server {
             ));
         }
         let provider: &dyn DeviceProvider = if id.starts_with("lovense:") {
-            &self.lovense
+            self.lovense.as_ref()
         } else if id.starts_with("buttplug:") {
             self.buttplug.as_ref()
         } else {
@@ -436,6 +460,7 @@ impl Server {
     /// send is a session drop (state still zeroes; the error surfaces).
     /// Returns whether a stop body was actually sent.
     fn zero_output(&self, event: &str) -> Result<bool, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
         let sent = self.send_stop_strict()?;
         self.lock_state().zero_and_disarm(event);
         Ok(sent)
@@ -448,6 +473,7 @@ impl Server {
     /// local zero still stands. A zero failure on either provider
     /// marks the session dropped; the first failure is the error.
     fn send_stop_strict(&self) -> Result<bool, AcheError> {
+        self.cancel_score();
         let lovense = self.lovense.zero();
         let buttplug = self.buttplug.zero();
         match (lovense, buttplug) {
@@ -465,6 +491,7 @@ impl Server {
     /// State has already been zeroed by the caller; a failure here
     /// means the session is gone and is recorded as a drop.
     fn send_stop_best_effort(&self) {
+        self.cancel_score();
         let lovense_failed = self.lovense.zero().is_err();
         let buttplug_failed = self.buttplug.zero().is_err();
         if lovense_failed || buttplug_failed {
@@ -482,6 +509,13 @@ impl Server {
     /// session drop: output state zeroes, the master latches off, and a
     /// best-effort zero on both providers follows the failed command.
     fn run_output(&self, intent: OutputIntent, device: Option<&str>) -> Result<Value, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
+        if self.score_running() {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop the running score before other output",
+            ));
+        }
         let snapshot = self.snapshot();
         let Some(device_id) = device else {
             let (body, effective, clamped) = match decide(&snapshot, &intent) {
@@ -540,6 +574,157 @@ impl Server {
         }
     }
 
+    fn cancel_score(&self) {
+        if let Some(run) = self.score.lock().unwrap().take() {
+            *run.cancelled.lock().unwrap() = true;
+            run.wake.notify_all();
+        }
+    }
+
+    fn score_running(&self) -> bool {
+        self.score.lock().unwrap().as_ref().is_some_and(|run| {
+            !*run.cancelled.lock().unwrap() && *run.remaining.lock().unwrap() > 0
+        })
+    }
+
+    fn start_score(&self, parts: &[ScorePart]) -> Result<Value, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
+        if self.lock_state().output_active() {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop active output before starting a score",
+            ));
+        }
+        let mut targets = Vec::new();
+        let mut devices = Vec::new();
+        for part in parts {
+            if let Ok(device) = self.resolve_device(&part.device) {
+                let selector = match device.provider {
+                    ProviderId::Lovense => device.id.strip_prefix("lovense:").unwrap().to_string(),
+                    ProviderId::Buttplug => device.id.clone(),
+                };
+                targets.push((device.id.clone(), selector, device.caps()));
+                devices.push(device);
+            }
+        }
+        let plans = decide_score(&self.snapshot(), parts, &targets)?;
+        let verdict: Vec<Value> = plans
+            .iter()
+            .map(|part| {
+                json!({
+                    "device": part.device,
+                    "segments": part.segments.iter().map(|p| json!({
+                        "effective": plan_effective(p), "clamped": p.clamped()
+                    })).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let run = Arc::new(ScoreRun {
+            cancelled: Mutex::new(false),
+            wake: Condvar::new(),
+            remaining: Mutex::new(plans.len()),
+        });
+        *self.score.lock().unwrap() = Some(run.clone());
+        self.lock_state().mark_output_started();
+        for part in plans {
+            let provider: Arc<dyn DeviceProvider> = match devices
+                .iter()
+                .find(|d| d.id == part.device)
+                .unwrap()
+                .provider
+            {
+                ProviderId::Lovense => self.lovense.clone(),
+                ProviderId::Buttplug => self.buttplug.clone(),
+            };
+            let run = run.clone();
+            let output_lock = self.output_lock.clone();
+            let state = self.state.clone();
+            let lovense = self.lovense.clone();
+            let buttplug = self.buttplug.clone();
+            // One independently waiting stream per device. Only sends are
+            // serialized; no stream owns the lock during its duration.
+            let spawned = std::thread::Builder::new()
+                .name("ache-score".into())
+                .spawn(move || {
+                    for (index, plan) in part.segments.iter().enumerate() {
+                        {
+                            let _output = output_lock.lock().unwrap();
+                            if *run.cancelled.lock().unwrap() {
+                                return;
+                            }
+                            let previous_zero = if index > 0 {
+                                let mut zero = part.segments[index - 1].clone();
+                                if let AllowedOutput::Function { strength, .. } = &mut zero {
+                                    *strength = 0;
+                                }
+                                provider.execute(&zero)
+                            } else {
+                                Ok(())
+                            };
+                            if previous_zero.and_then(|()| provider.execute(plan)).is_err() {
+                                *run.cancelled.lock().unwrap() = true;
+                                run.wake.notify_all();
+                                state.lock().unwrap().on_session_drop();
+                                let _ = lovense.zero();
+                                let _ = buttplug.zero();
+                                return;
+                            }
+                        }
+                        let AllowedOutput::Function { time_sec, .. } = plan else {
+                            unreachable!()
+                        };
+                        let cancelled = run.cancelled.lock().unwrap();
+                        let (cancelled, _) = run
+                            .wake
+                            .wait_timeout_while(
+                                cancelled,
+                                Duration::from_secs(*time_sec as u64),
+                                |cancelled| !*cancelled,
+                            )
+                            .unwrap();
+                        if *cancelled {
+                            return;
+                        }
+                    }
+                    let _output = output_lock.lock().unwrap();
+                    if *run.cancelled.lock().unwrap() {
+                        return;
+                    }
+                    // Explicit per-device zero on completion, through an already
+                    // approved action and selector; never a broadcast part stop.
+                    let mut zero = part.segments.last().unwrap().clone();
+                    if let AllowedOutput::Function { strength, .. } = &mut zero {
+                        *strength = 0;
+                    }
+                    if provider.execute(&zero).is_err() {
+                        *run.cancelled.lock().unwrap() = true;
+                        run.wake.notify_all();
+                        state.lock().unwrap().on_session_drop();
+                        let _ = lovense.zero();
+                        let _ = buttplug.zero();
+                        return;
+                    }
+                    let mut remaining = run.remaining.lock().unwrap();
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        state
+                            .lock()
+                            .unwrap()
+                            .zero_and_disarm("score completed; re-arm required");
+                    }
+                });
+            if let Err(error) = spawned {
+                self.lock_state().on_session_drop();
+                self.send_stop_best_effort();
+                return Err(AcheError::new(
+                    ErrorCode::RequestInvalid,
+                    format!("score worker failed: {error}"),
+                ));
+            }
+        }
+        Ok(json!({"gate": {"decision": "allow"}, "parts": verdict, "started": true}))
+    }
+
     /// The shared tail of every output path: on success the output is
     /// active; on failure the session drops (state zeroes, the master
     /// latches off, a best-effort zero follows).
@@ -565,6 +750,7 @@ impl Server {
     /// zero the state, latch off, then send the wire zero. Returns
     /// true exactly when it tripped.
     pub fn trip_watchdog(&self) -> bool {
+        let _output = self.output_lock.lock().unwrap();
         let tripped = self
             .lock_state()
             .trip_watchdog_if_expired(self.config.watchdog_secs);
@@ -582,6 +768,7 @@ impl Server {
     /// The explicit shutdown path: input ended while output is active.
     /// Zero it and say so on stderr — no skipped cleanup.
     pub fn zero_on_shutdown(&self) -> bool {
+        let _output = self.output_lock.lock().unwrap();
         if !self.output_active() {
             return false;
         }
@@ -689,6 +876,27 @@ pub(crate) fn tool_list() -> Value {
         "minimum": 1,
         "maximum": 3600,
         "description": "Duration in seconds. Bounded: indefinite output does not exist here."
+    });
+    let score_tool = json!({
+        "name": "ache_score_start",
+        "description": "Atomically plan every part, then start concurrent per-device streams. Any refused part refuses the whole score. Stop with lovense_stop; heartbeat required. Stop active output before starting.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": false, "required": ["parts"],
+            "properties": {"parts": {"type": "array", "minItems": 1, "maxItems": 32,
+                "items": {"type": "object", "additionalProperties": false,
+                    "required": ["device", "segments"], "properties": {
+                        "device": {"type": "string"},
+                        "segments": {"type": "array", "minItems": 1, "maxItems": 128,
+                            "items": {"type": "object", "additionalProperties": false,
+                                "required": ["action", "level", "duration"], "properties": {
+                                    "action": {"type": "string"},
+                                    "level": {"type": "integer", "minimum": 0},
+                                    "duration": {"type": "integer", "minimum": 1, "maximum": 3600}
+                                }}}
+                    }}}}
+        },
+        "annotations": {"title": "Start score", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
     });
     json!([
         {
@@ -914,6 +1122,7 @@ pub(crate) fn tool_list() -> Value {
                 "openWorldHint": true,
             },
         },
+        score_tool,
     ])
 }
 
@@ -1101,7 +1310,7 @@ mod tests {
     // --- validation ---------------------------------------------------
 
     #[test]
-    fn tools_list_is_exactly_the_ten_tools_with_full_schemas() {
+    fn tools_list_is_exactly_the_eleven_tools_with_full_schemas() {
         let listed = tool_list();
         let tools = listed.as_array().unwrap();
         let names: Vec<&str> = tools
@@ -2607,5 +2816,504 @@ mod ac2_stop_tests {
         );
         assert_eq!(status_of(&server)["output_active"], false);
         assert_eq!(status_of(&server)["armed"], false);
+    }
+}
+
+#[cfg(test)]
+mod score_tests {
+    use super::*;
+    use crate::decide::{GateSnapshot, ScoreSegment, TargetCaps};
+    use crate::provider::{Capability, ProviderProbe, bind_capabilities};
+    use crate::transport::MockTransport;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    #[derive(Clone)]
+    struct Quartet {
+        log: Arc<Mutex<Vec<AllowedOutput>>>,
+        fail: Arc<AtomicBool>,
+    }
+    impl Quartet {
+        fn new() -> Self {
+            Self {
+                log: Arc::default(),
+                fail: Arc::default(),
+            }
+        }
+    }
+    fn devices() -> Vec<Device> {
+        [
+            ("Lush 4", "Vibrate"),
+            ("Domi 2", "Vibrate"),
+            ("Flexer", "Rotate"),
+            ("Nora", "Rotate"),
+        ]
+        .iter()
+        .map(|(name, action)| {
+            let mut capabilities = vec![Capability {
+                feature: action.to_string(),
+                max: Some(20),
+                native: action.to_string(),
+                steps: None,
+            }];
+            bind_capabilities(&format!("Lovense {name}"), &mut capabilities);
+            Device {
+                id: format!("buttplug:{name}"),
+                provider: ProviderId::Buttplug,
+                name: name.to_string(),
+                kind: Some(format!("Lovense {name}")),
+                battery: None,
+                capabilities,
+                capability_source: "fixture",
+            }
+        })
+        .collect()
+    }
+    impl DeviceProvider for Quartet {
+        fn probe(&self) -> ProviderProbe {
+            ProviderProbe {
+                provider: ProviderId::Buttplug,
+                state: "mock",
+                available: true,
+                note: "quartet fixture".into(),
+            }
+        }
+        fn discover(&self) -> Result<Vec<Device>, AcheError> {
+            Ok(devices())
+        }
+        fn execute(&self, plan: &AllowedOutput) -> Result<(), AcheError> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(AcheError::new(
+                    ErrorCode::TargetUnreachable,
+                    "fixture disconnected",
+                ));
+            }
+            self.log.lock().unwrap().push(plan.clone());
+            Ok(())
+        }
+        fn zero(&self) -> Result<bool, AcheError> {
+            let mut log = self.log.lock().unwrap();
+            for device in devices() {
+                log.push(AllowedOutput::Function {
+                    feature: "Vibrate".into(),
+                    strength: 0,
+                    time_sec: 1,
+                    toy: device.id,
+                    clamped: false,
+                });
+            }
+            Ok(true)
+        }
+    }
+    fn parts(duration: i64) -> Vec<ScorePart> {
+        devices()
+            .iter()
+            .zip(["Vibrate", "Vibrate", "Fingering", "Rotate"])
+            .enumerate()
+            .map(|(i, (device, action))| ScorePart {
+                device: device.id.clone(),
+                segments: vec![ScoreSegment {
+                    action: action.into(),
+                    level: (i + 1) as i64 * 4,
+                    duration,
+                }],
+            })
+            .collect()
+    }
+    fn targets() -> Vec<(String, String, TargetCaps)> {
+        devices()
+            .into_iter()
+            .map(|d| (d.id.clone(), d.id.clone(), d.caps()))
+            .collect()
+    }
+    fn snapshot(armed: bool, ceiling: u8) -> GateSnapshot {
+        GateSnapshot {
+            armed,
+            ceiling,
+            target_configured: true,
+        }
+    }
+    fn setup() -> (Server, Quartet, Arc<Mutex<Vec<Value>>>) {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fixture = Quartet::new();
+        let server = Server::new(Config::default(), Some(Box::new(mock)))
+            .with_buttplug(Box::new(fixture.clone()));
+        server.arm().unwrap();
+        (server, fixture, sent)
+    }
+    fn wait_for(predicate: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !predicate() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for score worker"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn nonzero(log: &[AllowedOutput]) -> usize {
+        log.iter()
+            .filter(|p| matches!(p, AllowedOutput::Function { strength: 1.., .. }))
+            .count()
+    }
+    fn assert_zeroed(fixture: &Quartet) {
+        let log = fixture.log.lock().unwrap();
+        for d in devices() {
+            let last = log
+                .iter()
+                .rev()
+                .find(|p| matches!(p, AllowedOutput::Function {toy, ..} if toy == &d.id))
+                .unwrap();
+            assert!(
+                matches!(last, AllowedOutput::Function { strength: 0, .. }),
+                "{} not zeroed",
+                d.id
+            );
+        }
+    }
+    // Validation (10): the intended behavior and the existing-command boundary.
+    #[test]
+    fn validation_quartet_plans_differentiated_reported_actions() {
+        let plan = decide_score(&snapshot(true, 20), &parts(2), &targets()).unwrap();
+        assert_eq!(plan.len(), 4);
+        for (part, expected) in plan.iter().zip([4, 8, 12, 16]) {
+            assert!(
+                matches!(part.segments[0], AllowedOutput::Function {strength, ..} if strength == expected)
+            );
+        }
+        assert!(
+            matches!(&plan[2].segments[0], AllowedOutput::Function {feature, ..} if feature == "Fingering")
+        );
+    }
+    #[test]
+    fn validation_ceiling_applies_to_every_part() {
+        let plan = decide_score(&snapshot(true, 6), &parts(1), &targets()).unwrap();
+        for (part, expected) in plan.iter().zip([4, 6, 6, 6]) {
+            assert!(
+                matches!(part.segments[0], AllowedOutput::Function {strength, ..} if strength == expected)
+            );
+        }
+    }
+    #[test]
+    fn validation_one_part_matches_single_command_and_wire() {
+        let (server, fixture, _) = setup();
+        let part = parts(2).remove(0);
+        let intent = OutputIntent::Function(FunctionIntent {
+            feature: "Vibrate".into(),
+            strength: 4,
+            time_sec: 2,
+            toy: Some(part.device.clone()),
+        });
+        let expected = decide_plan(&server.snapshot(), &intent, &devices()[0].caps()).unwrap();
+        server.start_score(&[part]).unwrap();
+        wait_for(|| !fixture.log.lock().unwrap().is_empty());
+        assert_eq!(fixture.log.lock().unwrap()[0], expected);
+        let lovense_parts = [ScorePart {
+            device: "lovense:mock-toy-1".into(),
+            segments: vec![ScoreSegment {
+                action: "Vibrate".into(),
+                level: 4,
+                duration: 2,
+            }],
+        }];
+        let plan = decide_score(
+            &snapshot(true, 20),
+            &lovense_parts,
+            &[(
+                "lovense:mock-toy-1".into(),
+                "mock-toy-1".into(),
+                devices()[0].caps(),
+            )],
+        )
+        .unwrap();
+        let single = decide_plan(
+            &snapshot(true, 20),
+            &OutputIntent::Function(FunctionIntent {
+                feature: "Vibrate".into(),
+                strength: 4,
+                time_sec: 2,
+                toy: Some("mock-toy-1".into()),
+            }),
+            &devices()[0].caps(),
+        )
+        .unwrap();
+        assert_eq!(lovense_wire(&plan[0].segments[0]), lovense_wire(&single));
+        server.stop().unwrap();
+    }
+    #[test]
+    fn validation_concurrent_streams_interleave_before_any_part_finishes() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        for part in &mut score {
+            part.segments.push(part.segments[0].clone());
+        }
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) >= 4);
+        {
+            let log = fixture.log.lock().unwrap();
+            let ids: std::collections::HashSet<_> = log[..4]
+                .iter()
+                .map(|p| match p {
+                    AllowedOutput::Function { toy, .. } => toy.clone(),
+                    _ => unreachable!(),
+                })
+                .collect();
+            assert_eq!(
+                ids.len(),
+                4,
+                "all first segments precede any second segment"
+            );
+        }
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) >= 8);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn validation_completion_zeroes_and_reports_idle() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(1)).unwrap();
+        wait_for(|| !server.output_active());
+        assert_zeroed(&fixture);
+        assert_eq!(server.status()["score_running"], false);
+    }
+    #[test]
+    fn validation_stop_zeroes_every_device_before_return() {
+        let (server, fixture, sent) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+        assert_eq!(sent.lock().unwrap().last().unwrap()["action"], "Stop");
+        assert!(!server.lock_state().armed());
+        assert!(!server.score_running());
+    }
+    #[test]
+    fn validation_healthy_heartbeat_preserves_ensemble() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.lock_state().backdate_activity(4);
+        assert!(!server.trip_watchdog());
+        assert!(server.score_running());
+        server.stop().unwrap();
+    }
+    #[test]
+    fn validation_tool_returns_clamped_plan_with_one_new_surface() {
+        let (mut server, fixture, _) = setup();
+        server.config.intensity_ceiling = 2;
+        let result = server.dispatch_call("ache_score_start", Some(json!({"parts": [
+            {"device": "buttplug:Flexer", "segments": [{"action": "Fingering", "level": 12, "duration": 1}]}]}))).unwrap();
+        assert_eq!(result["isError"], false);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["parts"][0]["segments"][0]["effective"]["strength"], 2);
+        assert_eq!(body["parts"][0]["segments"][0]["clamped"], true);
+        assert_eq!(TOOL_NAMES.len(), 11);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+    }
+    // Adversarial (10): no partial starts, no stale output after a latch.
+    #[test]
+    fn adversarial_bad_parts_refuse_all_and_send_nothing_on_both_routes() {
+        let (server, fixture, sent) = setup();
+        let mut score = parts(1);
+        score[2].segments[0].action = "Heating".into();
+        score[3].segments[0].action = "Fingering".into();
+        let error = server.start_score(&score).unwrap_err();
+        let message = format!("{error:?}");
+        for name in ["Flexer", "Nora", "Heating", "Fingering"] {
+            assert!(message.contains(name), "{message}");
+        }
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(!server.output_active());
+    }
+    #[test]
+    fn adversarial_disarmed_refuses_every_part_without_send() {
+        let (server, fixture, sent) = setup();
+        server.lock_state().zero_and_disarm("test");
+        let error = server.start_score(&parts(1)).unwrap_err();
+        assert!(
+            error.to_json().to_string().contains("NotArmed")
+                || error.to_json().to_string().contains("not_armed")
+        );
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn adversarial_bounds_unknown_devices_and_reduced_capabilities() {
+        let mut cases = vec![vec![], parts(0), parts(3601), parts(i64::MAX)];
+        let mut unknown = parts(1);
+        unknown[0].device = "buttplug:missing".into();
+        cases.push(unknown);
+        let mut negative = parts(1);
+        negative[0].segments[0].level = -1;
+        cases.push(negative);
+        let mut reduced = parts(1);
+        reduced[0].segments[0].action = "Oscillate".into();
+        cases.push(reduced);
+        let mut empty = parts(1);
+        empty[0].segments.clear();
+        cases.push(empty);
+        for case in cases {
+            assert!(decide_score(&snapshot(true, 20), &case, &targets()).is_err());
+        }
+    }
+    #[test]
+    fn adversarial_duplicate_and_conflicting_output_refused() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        score.push(score[0].clone());
+        assert!(server.start_score(&score).is_err());
+        assert!(fixture.log.lock().unwrap().is_empty());
+        server.start_score(&parts(30)).unwrap();
+        assert!(server.start_score(&parts(1)).is_err());
+        assert!(
+            server
+                .run_output(
+                    OutputIntent::Function(FunctionIntent {
+                        feature: "Vibrate".into(),
+                        strength: 2,
+                        time_sec: 1,
+                        toy: None
+                    }),
+                    None
+                )
+                .is_err()
+        );
+        server.stop().unwrap();
+    }
+    #[test]
+    fn adversarial_watchdog_cancels_whole_ensemble_and_no_resume() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.lock_state().backdate_activity(6);
+        assert!(server.trip_watchdog());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(server.start_score(&parts(1)).is_err());
+    }
+    #[test]
+    fn adversarial_disconnect_reconnect_never_resumes_score() {
+        let (server, fixture, _) = setup();
+        fixture.fail.store(true, Ordering::SeqCst);
+        server.start_score(&parts(1)).unwrap();
+        wait_for(|| !server.output_active());
+        fixture.fail.store(false, Ordering::SeqCst);
+        let before = nonzero(&fixture.log.lock().unwrap());
+        assert!(server.start_score(&parts(1)).is_err());
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(nonzero(&fixture.log.lock().unwrap()), before);
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn adversarial_stop_then_rearm_does_not_revive_waiting_streams() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        for part in &mut score {
+            part.segments.push(part.segments[0].clone());
+        }
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.stop().unwrap();
+        let before = fixture.log.lock().unwrap().len();
+        server.arm().unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(fixture.log.lock().unwrap().len(), before);
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn adversarial_malformed_score_rejects_unknown_fields_without_send() {
+        let (server, fixture, sent) = setup();
+        for args in [
+            json!({"parts": null}),
+            json!({"parts": [], "override": true}),
+            json!({"parts": [{"device": "buttplug:Lush 4", "segments": [{"action": "Vibrate", "level": 1, "duration": 1, "override": true}]}]}),
+        ] {
+            assert!(
+                server
+                    .dispatch_call("ache_score_start", Some(args))
+                    .is_err()
+            );
+        }
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn validation_mixed_providers_start_and_stop_together() {
+        let (server, fixture, sent) = setup();
+        let mut score = parts(30);
+        score.push(ScorePart {
+            device: "lovense:mock-toy-1".into(),
+            segments: vec![ScoreSegment {
+                action: "Vibrate".into(),
+                level: 7,
+                duration: 30,
+            }],
+        });
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4 && sent.lock().unwrap().len() == 1);
+        assert_eq!(sent.lock().unwrap()[0]["toy"], "mock-toy-1");
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+        assert_eq!(sent.lock().unwrap().last().unwrap()["action"], "Stop");
+    }
+    #[test]
+    fn validation_action_transition_zeroes_previous_action() {
+        let (server, fixture, _) = setup();
+        let score = [ScorePart {
+            device: "buttplug:Flexer".into(),
+            segments: vec![
+                ScoreSegment {
+                    action: "Fingering".into(),
+                    level: 9,
+                    duration: 1,
+                },
+                ScoreSegment {
+                    action: "Rotate".into(),
+                    level: 3,
+                    duration: 1,
+                },
+            ],
+        }];
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 2);
+        let log = fixture.log.lock().unwrap();
+        assert!(
+            matches!(&log[1], AllowedOutput::Function {feature, strength: 0, ..} if feature == "Fingering")
+        );
+        assert!(
+            matches!(&log[2], AllowedOutput::Function {feature, strength: 3, ..} if feature == "Rotate")
+        );
+        drop(log);
+        server.stop().unwrap();
+    }
+    #[test]
+    fn adversarial_stop_failure_still_zeroes_other_provider_and_cancels() {
+        let mock = MockTransport::new();
+        let fail = mock.fail_flag();
+        let fixture = Quartet::new();
+        let server = Server::new(Config::default(), Some(Box::new(mock)))
+            .with_buttplug(Box::new(fixture.clone()));
+        server.arm().unwrap();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        fail.store(true, Ordering::SeqCst);
+        assert!(server.stop().is_err());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(!server.lock_state().armed());
+    }
+    #[test]
+    fn adversarial_shutdown_cancels_all_parts_without_resume() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        assert!(server.zero_on_shutdown());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(server.start_score(&parts(1)).is_err());
     }
 }

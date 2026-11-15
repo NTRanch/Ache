@@ -1,0 +1,40 @@
+{
+  "origin_lane": "ntranch",
+  "content_label": "nsfw",
+  "evidence": "final-gates-rerun.log; theodolite.jsonl",
+  "base_commit": "c4b9612edfac2b7bc4180b5ed6d9eea14867358a",
+  "branch": "step2-vocab",
+  "baseline_tests": {
+    "unit": 130,
+    "stdio": 9,
+    "failed": 0
+  },
+  "final_tests": {
+    "unit": 146,
+    "stdio": 9,
+    "failed": 0
+  },
+  "new_tests": {
+    "validation": 8,
+    "adversarial": 8
+  },
+  "final_gate_exit": 0,
+  "theodolite": {
+    "positive_control_errors": 1,
+    "restored": true,
+    "final_errors_by_file": {
+      "mcp/src/decide.rs": 0,
+      "mcp/src/provider.rs": 0,
+      "mcp/src/provider_buttplug.rs": 0
+    },
+    "caveat": "possibly_incomplete=server_not_quiescent; clean live producer and same-session control observed"
+  },
+  "sha256": {
+    "mcp/src/decide.rs": "9d45d94a45a7a96163e43ad2398813381095ebe220d275415e99f36bd723a78f",
+    "mcp/src/provider.rs": "1783055374eb117c8a1c5253c0291390bb3b38d0948c0b05cb47a507c3dc676f",
+    "mcp/src/provider_buttplug.rs": "ab5272e48faa74e2dbbe6a0ab1f08bd44eb69f7cdde111ba180c894ea9e282f9",
+    "DOCS-NOTES.md": "acf535f1e9a4b43bc791c22371876bf571fc53ba5748a9b8fd30b454d0835a6c"
+  },
+  "lovense_wire_source_byte_identical": true,
+  "server_service_unchanged": true
+}

@@ -42,7 +42,7 @@ const INSTRUCTIONS: &str = "ache — unified haptics: Lovense local Game Mode an
     embedded Buttplug server behind one surface. Tools: lovense_status, \
     lovense_toys, lovense_arm, lovense_disarm, lovense_function, \
     lovense_pattern, lovense_preset, lovense_stop, ache_devices, \
-    ache_device. Output is off by default: arm explicitly, every output \
+    ache_device, ache_score_start. Output is off by default: arm explicitly, every output \
     on either provider passes the one safety gate that clamps intensity \
     to the configured ceiling, and stop always works.";
 
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn tools_carry_the_served_names_and_annotations() {
         let tools = build_tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 11);
         let status = &tools[0];
         assert_eq!(status.name, "lovense_status");
         let annotations = status.annotations.as_ref().expect("annotations");

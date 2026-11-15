@@ -1,0 +1,110 @@
+{
+  "origin_lane": "ntranch",
+  "content_label": "nsfw",
+  "evidence": "final-gates.log; theodolite.jsonl; git read-only checks",
+  "branch": "step3-score",
+  "base": "c4b9612edfac2b7bc4180b5ed6d9eea14867358a",
+  "baseline_tests": 155,
+  "final_tests": 175,
+  "validation_tests": [
+    [
+      309,
+      "test server::score_tests::validation_ceiling_applies_to_every_part ... ok"
+    ],
+    [
+      314,
+      "test server::score_tests::validation_quartet_plans_differentiated_reported_actions ... ok"
+    ],
+    [
+      315,
+      "test server::score_tests::validation_tool_returns_clamped_plan_with_one_new_surface ... ok"
+    ],
+    [
+      345,
+      "test server::score_tests::validation_mixed_providers_start_and_stop_together ... ok"
+    ],
+    [
+      346,
+      "test server::score_tests::validation_one_part_matches_single_command_and_wire ... ok"
+    ],
+    [
+      352,
+      "test server::score_tests::validation_healthy_heartbeat_preserves_ensemble ... ok"
+    ],
+    [
+      353,
+      "test server::score_tests::validation_stop_zeroes_every_device_before_return ... ok"
+    ],
+    [
+      392,
+      "test server::score_tests::validation_completion_zeroes_and_reports_idle ... ok"
+    ],
+    [
+      393,
+      "test server::score_tests::validation_action_transition_zeroes_previous_action ... ok"
+    ],
+    [
+      394,
+      "test server::score_tests::validation_concurrent_streams_interleave_before_any_part_finishes ... ok"
+    ]
+  ],
+  "adversarial_tests": [
+    [
+      303,
+      "test server::score_tests::adversarial_malformed_score_rejects_unknown_fields_without_send ... ok"
+    ],
+    [
+      310,
+      "test server::score_tests::adversarial_duplicate_and_conflicting_output_refused ... ok"
+    ],
+    [
+      311,
+      "test server::score_tests::adversarial_bounds_unknown_devices_and_reduced_capabilities ... ok"
+    ],
+    [
+      312,
+      "test server::score_tests::adversarial_disarmed_refuses_every_part_without_send ... ok"
+    ],
+    [
+      313,
+      "test server::score_tests::adversarial_bad_parts_refuse_all_and_send_nothing_on_both_routes ... ok"
+    ],
+    [
+      337,
+      "test server::score_tests::adversarial_stop_failure_still_zeroes_other_provider_and_cancels ... ok"
+    ],
+    [
+      338,
+      "test server::score_tests::adversarial_shutdown_cancels_all_parts_without_resume ... ok"
+    ],
+    [
+      359,
+      "test server::score_tests::adversarial_watchdog_cancels_whole_ensemble_and_no_resume ... ok"
+    ],
+    [
+      383,
+      "test server::score_tests::adversarial_disconnect_reconnect_never_resumes_score ... ok"
+    ],
+    [
+      396,
+      "test server::score_tests::adversarial_stop_then_rearm_does_not_revive_waiting_streams ... ok"
+    ]
+  ],
+  "final_test_clippy_fmt_chained_exit": 0,
+  "diff_check_exit": 0,
+  "inherited_files_unchanged": {
+    "DOCS-NOTES.md": true,
+    "mcp/src/provider.rs": true,
+    "mcp/src/provider_buttplug.rs": true
+  },
+  "source_before": "",
+  "source_after": "",
+  "source_hashes": {
+    "mcp/src/decide.rs": "5105aaf812a1a69217eaad8559582e30f82fc25a78505eb6cb5683037a02b473",
+    "mcp/src/server.rs": "025f761da18bb6d3d79285b91d6389787ae9ff97f45a9dba3c3571d9f3f16021",
+    "mcp/src/service.rs": "02317ec45b5357e817b7e6e875e5461d774d8ab9fc2d073062259f562a9d7f62",
+    "mcp/tests/stdio_smoke.rs": "f096a4ab25ba363af954e280f57c316079c4ca9e03297d6c102efea0dfeaad48",
+    "mcp/src/provider.rs": "1783055374eb117c8a1c5253c0291390bb3b38d0948c0b05cb47a507c3dc676f",
+    "mcp/src/provider_buttplug.rs": "ab5272e48faa74e2dbbe6a0ab1f08bd44eb69f7cdde111ba180c894ea9e282f9"
+  }
+}
