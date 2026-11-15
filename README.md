@@ -33,6 +33,89 @@ gates below.
   references (Projekt Melody, Iced Coffee with Breastmilk,
   CumPartment), with what STROBE takes from each.
 
+## Roadmap
+
+- **Now — v1.0.0 (live on crates.io).** The unified gated server:
+  Lovense Standard API (local Game Mode route) + embedded Buttplug
+  behind one tool surface, every output through the pure `decide()`
+  gate. 10 tools.
+- **In release prep — v1.1.0.** *Symphony*, the multi-toy score
+  layer: per-device parts planned through the same gate, concurrent
+  dispatch, one ensemble latching stop. Plus the MCP Registry
+  listing under `io.github.NTRanch/ache`.
+- **In development.** An optional Server API provider for true
+  internet remote play — off by default, behind the same gate,
+  developer token held in the user's password store, QR pairing as
+  an explicit user act. Local custody stays the default.
+- **In production.** A live interactive demo: an animated performer
+  whose reactions are driven in real time through ache, with
+  genuine live device switching between toys on screen.
+- **Design stage.** Muse Gadgets: a physical stop button and an
+  e-ink status surface for the gate's state (armed, ceiling,
+  watchdog) — hardware witnesses to the contract, not decorations.
+- **Hardware ladder.** Live-device verification rungs, mock first,
+  hardware last and gated, per [TESTING.md](TESTING.md).
+
+## Toy coverage
+
+ache covers the full Lovense catalog below. One honesty rule governs
+the whole table: Lovense publishes no static per-toy function list —
+a connected toy *reports* its functions at runtime (`GetToys`), and
+ache reads the reported capabilities and drives only what is
+reported. The functions below are the expected reported set per toy.
+Features with no API action (heating, tapping, touch-sense) are
+named as app-only or input-only — the gate refuses them by name
+rather than pretending to map them.
+
+Routes: **GM** = Lovense Game Mode / Standard API via the Remote
+app (local LAN); **BLE** = direct Bluetooth via the embedded
+Buttplug provider.
+
+| Toy | How ache controls it | Route |
+| --- | --- | --- |
+| [Ambi](https://www.lovense.com/p/Dev_Ambi) | Vibrate | GM + BLE |
+| [Calor](https://www.lovense.com/p/Dev_Calor) | Vibrate — heating is app-only (no API action; refused by name) | GM + BLE |
+| [Diamo](https://www.lovense.com/p/Dev_Diamo) | Vibrate (multi-motor) | GM + BLE |
+| [Dolce](https://www.lovense.com/p/Dev_Dolce) | Vibrate ×2 motors | GM + BLE |
+| [Domi 2](https://www.lovense.com/p/Dev_Domi2) | Vibrate | GM + BLE |
+| [Edge 2](https://www.lovense.com/p/Dev_Edge2) | Vibrate ×2 motors | GM + BLE |
+| [Exomoon](https://www.lovense.com/p/Dev_Exomoon) | Vibrate (generic BLE match) | GM + BLE |
+| [Ferri](https://www.lovense.com/p/Dev_Ferri) | Vibrate | GM + BLE |
+| [Flexer](https://www.lovense.com/p/Dev_Flexer) | Vibrate ×2 + Fingering (modelled as a rotate feature on BLE) | GM + BLE |
+| [Gemini](https://www.lovense.com/p/Dev_Gemini) | Vibrate ×2 motors | GM + BLE |
+| [Gravity](https://www.lovense.com/p/Dev_Gravity) | Vibrate + Thrusting (modelled as oscillate on BLE) | GM + BLE |
+| [Gush](https://www.lovense.com/p/Dev_Gush) | Vibrate | GM + BLE |
+| [Hush 2](https://www.lovense.com/p/Dev_Hush2) | Vibrate | GM + BLE |
+| [Hyphy](https://www.lovense.com/p/Dev_Hyphy) | Vibrate ×2 motors | GM + BLE |
+| [Kraken](https://www.lovense.com/p/Dev_Kraken) | Vibrate (generic BLE match) | GM + BLE |
+| [Lapis](https://www.lovense.com/p/Dev_Lapis) | Vibrate ×3 motors (tip / internal / external) | GM + BLE |
+| [Lush 3](https://www.lovense.com/p/Dev_Lush3) | Vibrate | GM + BLE |
+| [Max 2](https://www.lovense.com/p/Dev_Max2) | Vibrate + Pump + Suction (pump modelled as constrict on BLE) | GM + BLE |
+| [Nora](https://www.lovense.com/p/Dev_Nora) | Vibrate + Rotate | GM + BLE |
+| [Osci 2](https://www.lovense.com/p/Dev_Osci2) | Vibrate + Oscillate on GM; BLE models vibration only | GM + BLE |
+| [Ridge](https://www.lovense.com/p/Dev_Ridge) | Vibrate + Rotate | GM + BLE |
+| [Sex Machine](https://www.lovense.com/p/Dev_SexMachine) | Oscillate | GM + BLE |
+| [Solace](https://www.lovense.com/p/Dev_Solace) | Thrusting + Fingering on GM; oscillate only on BLE | GM + BLE |
+| [Vulse](https://www.lovense.com/p/Dev_Vulse) | Vibrate + Thrusting on GM; BLE models vibration only | GM + BLE |
+| [Lush 4](https://lovense.store/) | Vibrate — LED tail lighting is app-only | GM + BLE |
+| [Lush 2](https://lovense.store/) | Vibrate | GM + BLE |
+| [Lush Mini](https://lovense.store/) | Vibrate (generic BLE match) | GM + BLE |
+| [Glint](https://lovense.store/) | Vibrate (generic BLE match) — touch-sense is input-only, never an output | GM + BLE |
+| [Spinel](https://lovense.store/) | Vibrate + Thrusting (modelled as oscillate on BLE) — heating is app-only | GM + BLE |
+| [Fizz](https://lovense.store/) | Suction — tapping has no API action; refused by name | GM + BLE |
+| [Mission 2](https://lovense.store/) | Vibrate — touch-sense is input-only, never an output | GM + BLE |
+| [Velvo](https://lovense.store/) | Vibrate + Rotate (the rolling bead is modelled as rotation) | GM + BLE |
+| [Tenera 2](https://lovense.store/) | Suction on GM; the generic BLE match does not model suction | GM + BLE |
+| [Osci 3](https://lovense.store/) | Vibrate + Oscillate — warming is app-only | GM + BLE |
+| [Mini Sex Machine](https://lovense.store/) | Oscillate | GM + BLE |
+| [Ferri Reserve](https://lovense.store/) | Vibrate | GM + BLE |
+
+Storefront models (below the developer-program 24 in the table)
+link to the Lovense store; per-toy control detail is in the
+coverage research behind [TOYS.md](TOYS.md). Solace Pro is covered
+by the same gate vocabulary (Position / Stroke / Depth) and is
+driven wherever it reports those functions.
+
 ## The Lovense surfaces, and which ones are ours
 
 Lovense publishes several unrelated API families. Keeping them
