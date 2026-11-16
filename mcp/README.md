@@ -1,5 +1,7 @@
 # ache
 
+mcp-name: io.github.NTRanch/ache
+
 The unified haptics MCP stdio server, built by Nice Thoughts Ranch.
 One server, three device providers behind a seam:
 
