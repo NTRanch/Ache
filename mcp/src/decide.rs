@@ -431,7 +431,21 @@ fn plan_function(
     intent: &FunctionIntent,
     caps: &TargetCaps,
 ) -> Result<AllowedOutput> {
-    let Some(feature) = Feature::from_action(&intent.feature) else {
+    // origin_lane: ntranch; content_label: nsfw
+    // Evidence: COVERAGE-MATRIX.md verdicts 1–3. Known physical actions
+    // without an evidenced route are capability refusals, not typos.
+    if matches!(intent.feature.as_str(), "Heating" | "Tapping") {
+        return capability_unsupported(format!("{} has no evidenced output route", intent.feature));
+    }
+    let feature = if intent.feature == "RollingBead" {
+        // Only the provider's named Velvo binding can publish this cap.
+        Feature {
+            action: "RollingBead",
+            api_max: 20,
+        }
+    } else if let Some(feature) = Feature::from_action(&intent.feature) {
+        feature
+    } else {
         return request_invalid(format!(
             "unknown function {:?}; expected one of {}",
             intent.feature,
@@ -449,7 +463,11 @@ fn plan_function(
     }
     let time_sec = valid_time_sec(intent.time_sec)?;
     let toy = valid_toy(&intent.toy)?;
-    let (strength, clamped) = clamp_strength(intent.strength, snapshot.ceiling, api_max);
+    let (strength, clamped) = clamp_strength(
+        intent.strength,
+        snapshot.ceiling,
+        api_max.min(feature.api_max),
+    );
     Ok(AllowedOutput::Function {
         feature: feature.action.to_string(),
         strength,
@@ -1107,4 +1125,189 @@ mod tests {
         let error = decide_plan(&snapshot, &function(5), &TargetCaps::lovense()).unwrap_err();
         assert_eq!(error.code, ErrorCode::NotArmed);
     }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: COVERAGE-MATRIX.md [G], Depth 0–3 and Stroke 0–100.
+#[cfg(test)]
+mod step2_tests {
+    use super::*;
+    fn intent(action: &str, strength: i64, time_sec: i64) -> OutputIntent {
+        OutputIntent::Function(FunctionIntent {
+            feature: action.into(),
+            strength,
+            time_sec,
+            toy: None,
+        })
+    }
+    fn snapshot(ceiling: u8) -> GateSnapshot {
+        GateSnapshot {
+            armed: true,
+            target_configured: true,
+            ceiling,
+        }
+    }
+    // Validation (2).
+    #[test]
+    fn newest_actions_have_exact_wire_names_and_ranges() {
+        for (action, max) in [("Depth", 3), ("Stroke", 100)] {
+            assert_eq!(Feature::from_action(action).unwrap().api_max, max);
+            assert!(Feature::action_names().contains(&action));
+            let p =
+                decide_plan(&snapshot(20), &intent(action, 2, 5), &TargetCaps::lovense()).unwrap();
+            assert_eq!(lovense_wire(&p).0["action"], format!("{action}:2"));
+            assert!(!p.clamped());
+        }
+    }
+    #[test]
+    fn newest_actions_obey_ceiling_and_feature_maximum() {
+        for (action, ceiling, want) in [
+            ("Depth", 20, 3),
+            ("Depth", 1, 1),
+            ("Stroke", 20, 20),
+            ("Stroke", 0, 0),
+        ] {
+            let p = decide_plan(
+                &snapshot(ceiling),
+                &intent(action, 101, 5),
+                &TargetCaps::lovense(),
+            )
+            .unwrap();
+            assert_eq!(lovense_wire(&p).1["strength"], want);
+            assert!(p.clamped());
+        }
+    }
+    // Adversarial (2).
+    #[test]
+    fn newest_actions_refuse_unreported_support_and_unbounded_duration() {
+        for action in ["Depth", "Stroke"] {
+            for time in [0, 3601] {
+                assert_eq!(
+                    decide_plan(
+                        &snapshot(20),
+                        &intent(action, 1, time),
+                        &TargetCaps::lovense()
+                    )
+                    .unwrap_err()
+                    .code,
+                    ErrorCode::RequestInvalid
+                );
+            }
+            assert_eq!(
+                decide_plan(
+                    &snapshot(20),
+                    &intent(action, -1, 5),
+                    &TargetCaps::lovense()
+                )
+                .unwrap_err()
+                .code,
+                ErrorCode::RequestInvalid
+            );
+            assert_eq!(
+                decide_plan(
+                    &snapshot(20),
+                    &intent(action, 1, 5),
+                    &TargetCaps::new(vec![], false)
+                )
+                .unwrap_err()
+                .code,
+                ErrorCode::CapabilityUnsupported
+            );
+        }
+    }
+    #[test]
+    fn reported_maximum_cannot_expand_the_documented_range() {
+        let caps = TargetCaps::new(vec![("Depth".into(), 255)], false);
+        let plan = decide_plan(&snapshot(20), &intent("Depth", 99, 5), &caps).unwrap();
+        assert_eq!(lovense_wire(&plan).1["strength"], 3);
+    }
+}
+
+/// A score is bounded to one hour per part, with no duplicate device streams.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScoreSegment {
+    pub action: String,
+    pub level: i64,
+    pub duration: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScorePart {
+    pub device: String,
+    pub segments: Vec<ScoreSegment>,
+}
+
+#[derive(Debug)]
+pub struct PlannedPart {
+    pub device: String,
+    pub segments: Vec<AllowedOutput>,
+}
+
+/// Pure, atomic planning. Discovery results are inputs, never inferred here.
+/// All refused parts are named; no partial plan escapes on any refusal.
+pub fn decide_score(
+    snapshot: &GateSnapshot,
+    parts: &[ScorePart],
+    targets: &[(String, String, TargetCaps)],
+) -> Result<Vec<PlannedPart>> {
+    if parts.is_empty() || parts.len() > 32 {
+        return Err(AcheError::new(
+            ErrorCode::RequestInvalid,
+            "score needs 1–32 parts",
+        ));
+    }
+    let mut refusals = Vec::new();
+    let mut planned = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for part in parts {
+        let mut segments = Vec::new();
+        let mut reasons = Vec::new();
+        if !seen.insert(&part.device) {
+            reasons.push("duplicate device stream".to_string());
+        }
+        if part.segments.is_empty() || part.segments.len() > 128 {
+            reasons.push("part needs 1–128 segments".to_string());
+        }
+        let total = part
+            .segments
+            .iter()
+            .try_fold(0_i64, |total, s| total.checked_add(s.duration));
+        if !matches!(total, Some(1..=TIME_SEC_MAX)) {
+            reasons.push("part total duration must be 1–3600 seconds".to_string());
+        }
+        match targets.iter().find(|(id, _, _)| id == &part.device) {
+            None => reasons.push("device unknown or discovery failed".to_string()),
+            Some((_, selector, caps)) => {
+                for (index, segment) in part.segments.iter().enumerate() {
+                    let intent = OutputIntent::Function(FunctionIntent {
+                        feature: segment.action.clone(),
+                        strength: segment.level,
+                        time_sec: segment.duration,
+                        toy: Some(selector.clone()),
+                    });
+                    match decide_plan(snapshot, &intent, caps) {
+                        Ok(plan) => segments.push(plan),
+                        Err(error) => reasons.push(format!("segment {index}: {error:?}")),
+                    }
+                }
+            }
+        }
+        if reasons.is_empty() {
+            planned.push(PlannedPart {
+                device: part.device.clone(),
+                segments,
+            });
+        } else {
+            refusals.push(format!("{}: {}", part.device, reasons.join("; ")));
+        }
+    }
+    if !refusals.is_empty() {
+        return Err(AcheError::new(
+            ErrorCode::RequestInvalid,
+            format!("whole score refused: {}", refusals.join(" | ")),
+        ));
+    }
+    Ok(planned)
 }

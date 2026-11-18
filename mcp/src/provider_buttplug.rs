@@ -37,7 +37,10 @@ use buttplug_server_hwmgr_serial::SerialPortCommunicationManagerBuilder;
 
 use crate::decide::{AllowedOutput, pattern_letter_action};
 use crate::error::{AcheError, ErrorCode, Result, err, truncate};
-use crate::provider::{Capability, Device, DeviceProvider, ProviderId, ProviderProbe};
+use crate::provider::{
+    Capability, Device, DeviceProvider, ProviderId, ProviderProbe, action_binding,
+    bind_capabilities,
+};
 
 /// How long startup may take before the provider reports unavailable.
 const START_TIMEOUT: Duration = Duration::from_secs(15);
@@ -334,13 +337,14 @@ async fn map_device(device: &ButtplugClientDevice) -> Device {
             if let Some(limits) = feature.get_output_limits(*output_type) {
                 capabilities.push(Capability {
                     feature: unified.unwrap_or(native).to_string(),
-                    max: unified.map(|_| 20),
+                    max: unified.map(|name| if name == "Pump" { 3 } else { 20 }),
                     native: (*native).to_string(),
                     steps: Some(limits.step_count()),
                 });
             }
         }
     }
+    bind_capabilities(device.name(), &mut capabilities);
     if capabilities.iter().any(|cap| cap.max.is_some()) {
         capabilities.push(Capability {
             feature: "All".to_string(),
@@ -384,13 +388,43 @@ fn find_device(client: &ButtplugClient, unified_id: &str) -> Result<ButtplugClie
 
 /// Drive one unified feature on one device at one unified strength.
 /// The gate has already validated and clamped; this only translates.
-async fn run_feature(device: &ButtplugClientDevice, feature: &str, strength: i64) -> Result<()> {
-    let value = ClientDeviceCommandValue::Percent(f64::from(strength as i32) / UNIFIED_SCALE);
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: COVERAGE-MATRIX.md [B][G]. Function Pump is 0–3;
+// Pattern strengths use the existing 0–20 intensity contract.
+fn native_value<'a>(model: &str, feature: &'a str, strength: i64, pattern: bool) -> (&'a str, f64) {
+    let binding = action_binding(model, feature);
+    let maximum = if pattern {
+        UNIFIED_SCALE
+    } else {
+        binding.map_or(
+            if feature == "Pump" {
+                3.0
+            } else {
+                UNIFIED_SCALE
+            },
+            |binding| f64::from(binding.max),
+        )
+    };
+    (
+        binding.map_or(feature, |binding| binding.native),
+        strength as f64 / maximum,
+    )
+}
+
+async fn run_feature(
+    device: &ButtplugClientDevice,
+    feature: &str,
+    strength: i64,
+    pattern: bool,
+) -> Result<()> {
+    // Use the same stated binding for discovery and dispatch.
+    let (feature, percent) = native_value(device.name(), feature, strength, pattern);
+    let value = ClientDeviceCommandValue::Percent(percent);
     let commands: Vec<ClientDeviceOutputCommand> = match feature {
         "Vibrate" => vec![ClientDeviceOutputCommand::Vibrate(value)],
         "Rotate" => vec![ClientDeviceOutputCommand::Rotate(value)],
         "Oscillate" => vec![ClientDeviceOutputCommand::Oscillate(value)],
-        "Pump" => vec![ClientDeviceOutputCommand::Constrict(value)],
+        "Pump" | "Constrict" => vec![ClientDeviceOutputCommand::Constrict(value)],
         "All" => [
             OutputType::Vibrate,
             OutputType::Rotate,
@@ -433,7 +467,7 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
         } => {
             let device = find_device(client, toy)?;
             tasks.abort_device(device.index());
-            run_feature(&device, feature, *strength).await?;
+            run_feature(&device, feature, *strength, false).await?;
             // Honour the plan's bounded duration: Buttplug commands
             // carry none, so the zero is scheduled here and aborted
             // by any superseding command or stop.
@@ -463,7 +497,12 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
                 mapped
                     .capabilities
                     .iter()
-                    .filter(|cap| cap.max.is_some() && cap.feature != "All")
+                    .filter(|cap| {
+                        cap.max.is_some()
+                            && cap.feature != "All"
+                            && action_binding(device.name(), &cap.feature)
+                                .is_none_or(|binding| binding.action == "Pump")
+                    })
                     .map(|cap| cap.feature.clone())
                     .collect()
             } else {
@@ -489,7 +528,7 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
                 loop {
                     let strength = strengths[step % strengths.len()];
                     for feature in &driven {
-                        let _ = run_feature(&stepping, feature, strength).await;
+                        let _ = run_feature(&stepping, feature, strength, true).await;
                     }
                     step += 1;
                     if started.elapsed() + interval >= deadline {
@@ -502,7 +541,7 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
                 }
                 // A pattern ends by zeroing what it drove.
                 for feature in &driven {
-                    let _ = run_feature(&stepping, feature, 0).await;
+                    let _ = run_feature(&stepping, feature, 0, true).await;
                 }
             });
             tasks.add(device.index(), handle.abort_handle());
@@ -560,5 +599,44 @@ mod tests {
         }
         // Zero is always safe to call, whatever state the stack is in.
         let _ = provider.zero();
+    }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: named provider bindings and existing Pattern intensity contract.
+#[cfg(test)]
+mod step2_tests {
+    use super::*;
+    use crate::provider::ACTION_BINDINGS;
+    // Validation.
+    #[test]
+    fn actual_dispatch_translation_uses_named_native_outputs_and_full_scale() {
+        for binding in ACTION_BINDINGS {
+            let (native, value) =
+                native_value(binding.model, binding.action, i64::from(binding.max), false);
+            assert_eq!(native, binding.native);
+            assert_eq!(value, 1.0);
+            assert_eq!(native_value(binding.model, binding.action, 0, false).1, 0.0);
+        }
+    }
+    // Adversarial: do not interpret a Pattern Pump intensity as a Function level.
+    #[test]
+    fn pattern_pump_never_uses_the_three_step_function_divisor() {
+        assert_eq!(
+            native_value("Lovense Max", "Pump", 20, true),
+            ("Constrict", 1.0)
+        );
+        assert_eq!(
+            native_value("Lovense Max", "Pump", 3, false),
+            ("Constrict", 1.0)
+        );
+        assert_eq!(
+            native_value("Lovense Max", "Pump", 3, true),
+            ("Constrict", 0.15)
+        );
+        assert_eq!(
+            native_value("unknown", "Fingering", 20, false).0,
+            "Fingering"
+        );
     }
 }

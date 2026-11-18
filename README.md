@@ -12,8 +12,9 @@ for STROBE, and media-sync research for future interactive media.
 
 This is a planning and integration repo. It contains no credentials.
 Its production code is the MCP server in [`mcp/`](mcp/README.md) —
-**ache**, the unified haptics server (Lovense Standard API + embedded
-Buttplug behind one gated tool surface), built under the checklist
+**ache**, the unified haptics server (Lovense Standard API local
+route + embedded Buttplug + the opt-in Server API cloud route,
+behind one gated tool surface), built under the checklist
 gates below.
 
 ## Start here
@@ -128,7 +129,11 @@ straight is most of the work:
    clamped in the bridge, stop is first-class). The server route of
    the Standard API (commands relayed through Lovense's cloud with a
    developer token) was evaluated and rejected for STROBE on latency
-   and token-custody grounds.
+   and token-custody grounds. For ache itself the posture was later
+   amended (D-1451): ache's Server API provider implements the server
+   route behind the same gate, opt-in and off by default, with the
+   token referenced by password-store path only — see
+   [`mcp/README.md`](mcp/README.md).
 2. **App Gallery platform API.** For apps hosted inside Lovense
    Remote's App Gallery. This is the surface behind the App Gallery
    Console (public profile, app listings). New territory for the

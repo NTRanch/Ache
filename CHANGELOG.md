@@ -3,6 +3,23 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
+## 1.1.0 — 2026-11-14 — score layer: multi-toy symphony
+
+- Step 3, the score layer: multi-toy symphony is built into the
+  server itself, not demo scripting. One new tool,
+  `ache_score_start`, starts a score; each per-device part passes
+  through decide() on its own, parts dispatch concurrently, and
+  one ensemble stop latches every device.
+- Step 2, the full catalog: the vocabulary now covers all
+  compatible Lovense toys for women with all features, including
+  Bluetooth-only toys, behind the same decide() gate.
+- Safety posture unchanged: the master switch stays off by
+  default, decide() behaviour is unchanged, and stop stays
+  available in every state.
+- Gates: 175 tests passing (166 unit + 9 stdio smoke). Evidence
+  in `evidence/` and `step3-evidence/`; step reports at the
+  repository root.
+
 ## 0.4.0 — 2026-10-27 — rmcp migration, modern era only
 
 The protocol layer moves from the hand-rolled stdio loop to the

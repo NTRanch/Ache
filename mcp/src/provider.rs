@@ -1,14 +1,15 @@
-//! The provider seam: two device providers behind one trait, in the
+//! The provider seam: three device providers behind one trait, in the
 //! estate's provider pattern — a read side (a pure probe, discovery)
 //! and an output side that executes exactly one thing, a
 //! [`AllowedOutput`] plan the `decide()` gate constructed and allowed.
 //! No provider sees a raw intent, no provider validates on its own, and
 //! no caller assembles a provider command: the gate is the single
-//! choke point for both providers, which is what makes the safety
+//! choke point for every provider, which is what makes the safety
 //! contract's cross-provider parity structural rather than promised.
 //!
 //! The unified device model lives here too: a device is data — an id
-//! namespaced by its provider (`lovense:<toy id>`, `buttplug:<index>`),
+//! namespaced by its provider (`lovense:<toy id>`, `buttplug:<index>`,
+//! `serverapi:<toy id>`),
 //! a name, and its capabilities as reported values, each either mapped
 //! onto the unified feature vocabulary (with its maximum on the
 //! unified 0..=20 strength scale) or carried as provider-native data
@@ -33,6 +34,9 @@ use crate::transport::{Toy, Transport};
 pub enum ProviderId {
     Lovense,
     Buttplug,
+    /// The Lovense Server API provider (D-1451): the cloud route,
+    /// opt-in and off by default, behind the same gate.
+    ServerApi,
 }
 
 impl ProviderId {
@@ -40,6 +44,98 @@ impl ProviderId {
         match self {
             ProviderId::Lovense => "lovense",
             ProviderId::Buttplug => "buttplug",
+            ProviderId::ServerApi => "serverapi",
+        }
+    }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: COVERAGE-MATRIX.md [B], local buttplug_server_device_config 12.0.1
+// device-config/protocols/lovense.yml. These are translations, NOT support
+// tables: each binding also requires a runtime-enumerated native output.
+pub const MAPPING_EVIDENCE: &str = "https://docs.rs/crate/buttplug_server_device_config/12.0.1/source/device-config/protocols/lovense.yml";
+
+#[derive(Clone, Copy, Debug)]
+pub struct ActionBinding {
+    pub model: &'static str,
+    pub action: &'static str,
+    pub native: &'static str,
+    pub max: u8,
+    pub evidence: &'static str,
+}
+
+pub const ACTION_BINDINGS: &[ActionBinding] = &[
+    ActionBinding {
+        model: "Lovense Flexer",
+        action: "Fingering",
+        native: "Rotate",
+        max: 20,
+        evidence: MAPPING_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Lovense Gravity",
+        action: "Thrusting",
+        native: "Oscillate",
+        max: 20,
+        evidence: MAPPING_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Lovense Solace",
+        action: "Thrusting",
+        native: "Oscillate",
+        max: 20,
+        evidence: MAPPING_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Lovense Spinel",
+        action: "Thrusting",
+        native: "Oscillate",
+        max: 20,
+        evidence: MAPPING_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Lovense Max",
+        action: "Pump",
+        native: "Constrict",
+        max: 3,
+        evidence: MAPPING_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Lovense Velvo",
+        action: "RollingBead",
+        native: "Rotate",
+        max: 20,
+        evidence: MAPPING_EVIDENCE,
+    },
+];
+
+pub fn action_binding(model: &str, action: &str) -> Option<&'static ActionBinding> {
+    ACTION_BINDINGS
+        .iter()
+        .find(|binding| binding.model == model && binding.action == action)
+}
+
+/// Add aliases only when the provider actually enumerates the native output.
+/// Config identity, never the user-editable display name, selects the binding.
+pub fn bind_capabilities(model: &str, capabilities: &mut Vec<Capability>) {
+    for binding in ACTION_BINDINGS
+        .iter()
+        .filter(|binding| binding.model == model)
+    {
+        if capabilities.iter().any(|cap| cap.feature == binding.action) {
+            continue;
+        }
+        if let Some(cap) = capabilities
+            .iter()
+            .find(|cap| cap.native == binding.native && cap.max.is_some())
+            .cloned()
+        {
+            capabilities.push(Capability {
+                feature: binding.action.to_string(),
+                max: Some(binding.max),
+                native: binding.native.to_string(),
+                steps: cap.steps,
+            });
         }
     }
 }
@@ -75,7 +171,8 @@ impl Capability {
 /// One device in the unified model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
-    /// Unified id: `lovense:<toy id>` or `buttplug:<index>`.
+    /// Unified id: `lovense:<toy id>`, `buttplug:<index>`, or
+    /// `serverapi:<toy id>`.
     pub id: String,
     pub provider: ProviderId,
     pub name: String,
@@ -86,8 +183,7 @@ pub struct Device {
     pub battery: Option<u8>,
     pub capabilities: Vec<Capability>,
     /// Where the capability list came from: `reported` (the device or
-    /// its app said so), `provider_default` (the provider's full set;
-    /// the device reported nothing), or `fixture` (test data).
+    /// its app said so), `unreported` (the device reported nothing), or `fixture` (test data).
     pub capability_source: &'static str,
 }
 
@@ -101,11 +197,68 @@ impl Device {
             "battery": self.battery,
             "capabilities": self.capabilities.iter().map(Capability::to_json).collect::<Vec<_>>(),
             "capability_source": self.capability_source,
+            "action_bindings": self.bindings_json(),
+            "route_reductions": self.reductions_json(),
         })
     }
 
+    fn bindings_json(&self) -> Vec<Value> {
+        if self.provider != ProviderId::Buttplug {
+            return Vec::new();
+        }
+        ACTION_BINDINGS
+            .iter()
+            .filter(|binding| {
+                self.kind.as_deref() == Some(binding.model)
+                    && self.capabilities.iter().any(|cap| {
+                        cap.feature == binding.action
+                            && cap.native == binding.native
+                            && cap.max.is_some()
+                    })
+            })
+            .map(|binding| {
+                json!({
+                    "action": binding.action, "native": binding.native, "max": binding.max,
+                    "evidence": binding.evidence, "origin_lane": "ntranch", "content_label": "nsfw",
+                })
+            })
+            .collect()
+    }
+
+    fn reductions_json(&self) -> Vec<Value> {
+        if self.provider != ProviderId::Buttplug {
+            return Vec::new();
+        }
+        // Evidence describes missing route features, never grants support.
+        // The Osci family identity does not verify the physical generation.
+        let missing = match self.kind.as_deref() {
+            Some("Lovense Osci" | "Lovense Osci 2") => Some("Oscillate"),
+            Some("Lovense Vulse") => Some("Thrusting"),
+            Some("Lovense Tenera 2") => Some("Suction"),
+            // Generic enumeration cannot identify Tenera 2. Report the
+            // limitation without claiming which physical toy connected.
+            Some("Lovense Device") => {
+                return vec![json!({
+                    "dropped_features": ["non-vibration outputs (including Tenera 2 suction)"],
+                    "status": "UNVERIFIED model identity; generic route models vibration only",
+                    "evidence": MAPPING_EVIDENCE, "origin_lane": "ntranch", "content_label": "nsfw",
+                })];
+            }
+            _ => None,
+        };
+        missing.filter(|action| !self.capabilities.iter().any(|cap| cap.feature == *action && cap.max.is_some()))
+            .map(|action| vec![json!({
+                "dropped_features": [action], "status": "not modelled on this route; physical generation UNVERIFIED",
+                "evidence": MAPPING_EVIDENCE, "origin_lane": "ntranch", "content_label": "nsfw",
+            })]).unwrap_or_default()
+    }
+
     /// The gate's view of this device: mapped capabilities only, plus
-    /// preset support (a Lovense-only capability).
+    /// preset support. Presets are a Lovense-vocabulary capability:
+    /// the local route and the Server API route both carry the
+    /// documented Function/Pattern/Preset vocabulary (evidence:
+    /// COVERAGE-MATRIX.md [L], Lovense Standard Solutions), so both
+    /// Lovense providers support them; Buttplug does not.
     #[must_use]
     pub fn caps(&self) -> TargetCaps {
         TargetCaps::new(
@@ -113,7 +266,7 @@ impl Device {
                 .iter()
                 .filter_map(|cap| cap.max.map(|max| (cap.feature.clone(), max)))
                 .collect(),
-            self.provider == ProviderId::Lovense,
+            matches!(self.provider, ProviderId::Lovense | ProviderId::ServerApi),
         )
     }
 }
@@ -233,18 +386,7 @@ fn toy_to_device(toy: &Toy) -> Device {
                 .collect();
             (capabilities, "reported")
         }
-        None => {
-            let capabilities = Feature::action_names()
-                .into_iter()
-                .map(|name| Capability {
-                    feature: name.to_string(),
-                    max: Feature::from_action(name).map(|feature| feature.api_max),
-                    native: format!("lovense:{name}"),
-                    steps: None,
-                })
-                .collect();
-            (capabilities, "provider_default")
-        }
+        None => (Vec::new(), "unreported"),
     };
     Device {
         id: format!("lovense:{}", toy.id),
@@ -588,5 +730,223 @@ mod tests {
             ErrorCode::ProviderUnavailable
         );
         assert!(!provider.zero().unwrap());
+    }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: dispatch COVERAGE-MATRIX.md verdict queue; mock-only tests.
+#[cfg(test)]
+mod step2_tests {
+    use super::*;
+    use crate::decide::{FunctionIntent, decide_plan};
+    use crate::transport::MockTransport;
+
+    fn cap(native: &str, max: u8) -> Capability {
+        Capability {
+            feature: native.to_string(),
+            native: native.to_string(),
+            max: Some(max),
+            steps: Some(20),
+        }
+    }
+    fn device(model: &str, capabilities: Vec<Capability>) -> Device {
+        Device {
+            kind: Some(model.to_string()),
+            name: model.to_string(),
+            capabilities,
+            ..FakeButtplug::fixture_devices().remove(0)
+        }
+    }
+    fn toy(functions: Option<Vec<String>>) -> Toy {
+        Toy {
+            id: "runtime".into(),
+            name: "unverified".into(),
+            toy_type: None,
+            battery: None,
+            functions,
+        }
+    }
+    fn snapshot() -> GateSnapshot {
+        GateSnapshot {
+            armed: true,
+            target_configured: true,
+            ceiling: 20,
+        }
+    }
+    fn intent(action: &str, strength: i64, time_sec: i64) -> OutputIntent {
+        OutputIntent::Function(FunctionIntent {
+            feature: action.into(),
+            strength,
+            time_sec,
+            toy: None,
+        })
+    }
+
+    // Validation (5).
+    #[test]
+    fn reported_depth_stroke_preserve_their_api_ranges() {
+        let d = toy_to_device(&toy(Some(vec!["Depth".into(), "Stroke".into()])));
+        assert_eq!(d.caps().max_for("Depth"), Some(3));
+        assert_eq!(d.caps().max_for("Stroke"), Some(100));
+        assert_eq!(d.capability_source, "reported");
+    }
+    #[test]
+    fn named_bindings_require_and_preserve_runtime_outputs() {
+        for binding in ACTION_BINDINGS {
+            let mut caps = vec![cap(binding.native, binding.max)];
+            bind_capabilities(binding.model, &mut caps);
+            let d = device(binding.model, caps);
+            assert_eq!(d.caps().max_for(binding.action), Some(binding.max));
+            let json = d.to_json();
+            assert_eq!(json["action_bindings"][0]["evidence"], binding.evidence);
+            assert_eq!(json["action_bindings"][0]["origin_lane"], "ntranch");
+        }
+    }
+    #[test]
+    fn mapped_actions_have_equal_clamping_and_execute_on_mock_providers() {
+        let transport = MockTransport::new();
+        let sent = transport.sent_log();
+        let lovense = LovenseProvider::new(&Config::default(), Some(Box::new(transport)));
+        let buttplug = FakeButtplug::new();
+        for binding in ACTION_BINDINGS
+            .iter()
+            .filter(|binding| binding.action != "RollingBead")
+        {
+            let mut caps = vec![cap(binding.native, binding.max)];
+            // Real enumeration maps Constrict to Pump before alias binding.
+            if binding.native == "Constrict" {
+                caps[0].feature = "Pump".into();
+            }
+            bind_capabilities(binding.model, &mut caps);
+            let ble = device(binding.model, caps);
+            let gm = toy_to_device(&toy(Some(vec![binding.action.into()])));
+            for strength in [0, 2, 3, 20, 99] {
+                let output = intent(binding.action, strength, 5);
+                let a = decide_plan(&snapshot(), &output, &gm.caps()).unwrap();
+                let b = decide_plan(&snapshot(), &output, &ble.caps()).unwrap();
+                assert_eq!(a, b);
+                lovense.execute(&a).unwrap();
+                buttplug.execute(&b).unwrap();
+            }
+        }
+        assert_eq!(sent.lock().unwrap().len(), 25);
+    }
+    #[test]
+    fn named_route_reductions_appear_in_device_data() {
+        for (model, missing) in [
+            ("Lovense Osci", "Oscillate"),
+            ("Lovense Osci 2", "Oscillate"),
+            ("Lovense Vulse", "Thrusting"),
+            ("Lovense Tenera 2", "Suction"),
+        ] {
+            let json = device(model, vec![cap("Vibrate", 20)]).to_json();
+            assert_eq!(json["route_reductions"][0]["dropped_features"][0], missing);
+            assert_eq!(json["route_reductions"][0]["evidence"], MAPPING_EVIDENCE);
+        }
+    }
+    #[test]
+    fn rolling_bead_is_allowed_only_by_the_named_ble_binding() {
+        let mut caps = vec![cap("Rotate", 20)];
+        bind_capabilities("Lovense Velvo", &mut caps);
+        let plan = decide_plan(
+            &snapshot(),
+            &intent("RollingBead", 99, 5),
+            &device("Lovense Velvo", caps).caps(),
+        )
+        .unwrap();
+        assert!(plan.clamped());
+        assert_eq!(
+            action_binding("Lovense Velvo", "RollingBead")
+                .unwrap()
+                .native,
+            "Rotate"
+        );
+    }
+
+    // Adversarial (5).
+    #[test]
+    fn absent_functions_are_unreported_not_assumed() {
+        let d = toy_to_device(&toy(None));
+        assert!(d.capabilities.is_empty());
+        assert_eq!(d.capability_source, "unreported");
+        for action in ["Depth", "Stroke", "Vibrate"] {
+            assert_eq!(
+                decide_plan(&snapshot(), &intent(action, 1, 5), &d.caps())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CapabilityUnsupported
+            );
+        }
+    }
+    #[test]
+    fn mappings_never_create_an_unenumerated_output_or_use_display_name() {
+        for binding in ACTION_BINDINGS {
+            let mut caps = vec![cap("Vibrate", 20)];
+            bind_capabilities(binding.model, &mut caps);
+            assert_eq!(caps.len(), 1);
+            let mut caps = vec![cap(binding.native, binding.max)];
+            bind_capabilities("unknown", &mut caps);
+            assert_eq!(caps.len(), 1);
+        }
+        let mut d = device("unknown", vec![cap("Rotate", 20)]);
+        d.name = "Lovense Velvo".into();
+        assert!(d.bindings_json().is_empty());
+    }
+    #[test]
+    fn named_refusals_are_equal_and_send_nothing_on_mock_providers() {
+        let transport = MockTransport::new();
+        let sent = transport.sent_log();
+        let lovense = LovenseProvider::new(&Config::default(), Some(Box::new(transport)));
+        let ble = FakeButtplug::new();
+        for action in ["Heating", "Tapping", "RollingBead"] {
+            for provider in [&lovense as &dyn DeviceProvider, &ble] {
+                let caps = provider.discover().unwrap()[0].caps();
+                let error = decide_plan(&snapshot(), &intent(action, 1, 5), &caps).unwrap_err();
+                assert_eq!(error.code, ErrorCode::CapabilityUnsupported);
+                assert!(error.message.contains(action));
+            }
+        }
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(ble.executed_log().lock().unwrap().is_empty());
+    }
+    #[test]
+    fn mapped_actions_refuse_invalid_duration_negative_strength_and_disarmed_equally() {
+        for binding in ACTION_BINDINGS.iter().filter(|b| b.action != "RollingBead") {
+            let caps = TargetCaps::new(vec![(binding.action.into(), binding.max)], false);
+            for bad in [
+                intent(binding.action, -1, 5),
+                intent(binding.action, 1, 0),
+                intent(binding.action, 1, 3601),
+            ] {
+                let a = decide_plan(&snapshot(), &bad, &TargetCaps::lovense()).unwrap_err();
+                let b = decide_plan(&snapshot(), &bad, &caps).unwrap_err();
+                assert_eq!(a.code, ErrorCode::RequestInvalid);
+                assert_eq!(a.code, b.code);
+            }
+            let disarmed = GateSnapshot {
+                armed: false,
+                ..snapshot()
+            };
+            assert_eq!(
+                decide_plan(&disarmed, &intent(binding.action, 1, 5), &caps)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::NotArmed
+            );
+        }
+    }
+    #[test]
+    fn generic_model_reduction_does_not_claim_tenera_identity_or_suction() {
+        let d = device("Lovense Device", vec![cap("Vibrate", 20)]);
+        let json = d.to_json();
+        assert!(
+            json["route_reductions"][0]["status"]
+                .as_str()
+                .unwrap()
+                .contains("UNVERIFIED")
+        );
+        assert_eq!(d.caps().max_for("Suction"), None);
+        let restored = device("Lovense Osci 2", vec![cap("Oscillate", 20)]);
+        assert!(restored.reductions_json().is_empty());
     }
 }

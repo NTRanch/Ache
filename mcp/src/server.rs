@@ -1,16 +1,18 @@
-//! The tool surface and dispatch core. Ten tools. The original eight
+//! The tool surface and dispatch core. Twelve tools. The original eight
 //! (`lovense_*`) keep their names and shapes: two read-only (status,
 //! toys) and six for the output core (arm, disarm, function, pattern,
 //! preset, stop). Two unified read-only tools (`ache_devices`,
-//! `ache_device`) enumerate devices across both providers — the
-//! Lovense Standard API provider and the embedded Buttplug provider —
-//! with capabilities as data; the output tools route to either
-//! provider when given a unified `device` id. Every output, on either
-//! provider, passes the one `decide()` gate in `decide.rs` before
-//! anything can reach a device. Protocol misuse (bad arguments) is a
-//! JSON-RPC error; an operational failure (no target, unreachable app,
-//! a gate deny) is a tool result with `isError: true` and the
-//! structured error as its text.
+//! `ache_device`) enumerate devices across every provider — the
+//! Lovense Standard API provider, the embedded Buttplug provider, and
+//! the opt-in Server API provider (D-1451) — with capabilities as
+//! data; the output tools route to any provider when given a unified
+//! `device` id. `ache_pairing` serves the Server API provider's
+//! pairing surface (state, and an explicit QR request); it can cause
+//! no output. Every output, on any provider, passes the one
+//! `decide()` gate in `decide.rs` before anything can reach a device.
+//! Protocol misuse (bad arguments) is a JSON-RPC error; an operational
+//! failure (no target, unreachable app, a gate deny) is a tool result
+//! with `isError: true` and the structured error as its text.
 //!
 //! The wire itself is no longer hand-rolled here: the era guard
 //! (`guard.rs`) owns the framing contract and the rmcp service
@@ -18,17 +20,19 @@
 //! This module owns what neither may touch: the handlers, the tool
 //! definitions (served raw, unchanged), and the safety state.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
 use crate::config::{Config, TransportKind};
 use crate::decide::{
     AllowedOutput, Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent,
-    TOY_ID_BYTES_MAX, decide, decide_plan, lovense_wire,
+    ScorePart, TOY_ID_BYTES_MAX, decide, decide_plan, decide_score, lovense_wire,
 };
 use crate::error::{AcheError, ErrorCode};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
+use crate::provider_server_api::{NoPairing, PairingProvider};
 use crate::state::SafetyState;
 use crate::transport::Transport;
 
@@ -42,7 +46,7 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// Every tool the server serves, in `tools/list` order. The original
 /// eight keep their positions; the unified tools append.
-pub(crate) const TOOL_NAMES: [&str; 10] = [
+pub(crate) const TOOL_NAMES: [&str; 12] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -53,6 +57,8 @@ pub(crate) const TOOL_NAMES: [&str; 10] = [
     "lovense_stop",
     "ache_devices",
     "ache_device",
+    "ache_score_start",
+    "ache_pairing",
 ];
 
 pub struct Server {
@@ -60,14 +66,30 @@ pub struct Server {
     /// The Lovense provider. Its transport is `None` exactly when the
     /// config names the real transport without a host; then nothing can
     /// reach the Lovense wire.
-    lovense: LovenseProvider,
+    lovense: Arc<LovenseProvider>,
     /// The Buttplug provider: embedded in production, a fixture in mock
     /// mode, or inert (disabled / not wired by a bare constructor).
-    buttplug: Box<dyn DeviceProvider>,
+    buttplug: Arc<dyn DeviceProvider>,
+    /// The Server API provider (D-1451): the cloud route, inert unless
+    /// the operator enabled it in config and production wiring
+    /// replaced it. Inert is its default state in every sense.
+    server_api: Arc<dyn DeviceProvider>,
+    /// The Server API pairing surface, wired alongside the provider:
+    /// a `NoPairing` (refusing, state-reporting) instance whenever the
+    /// provider is disabled or unwired.
+    pairing: Arc<dyn PairingProvider>,
     /// The safety state machine: arm latch, output activity, watchdog
     /// bookkeeping, session health. One state for the whole server —
-    /// the master toggle and the watchdog govern both providers.
-    state: Mutex<SafetyState>,
+    /// the master toggle and the watchdog govern every provider.
+    state: Arc<Mutex<SafetyState>>,
+    output_lock: Arc<Mutex<()>>,
+    score: Mutex<Option<Arc<ScoreRun>>>,
+}
+
+struct ScoreRun {
+    cancelled: Mutex<bool>,
+    wake: Condvar,
+    remaining: Mutex<usize>,
 }
 
 /// A tool dispatch failure: protocol misuse is answered with a JSON-RPC
@@ -90,27 +112,52 @@ impl From<(i64, String)> for CallError {
 }
 
 impl Server {
-    /// A server with the Lovense provider wired; the Buttplug
-    /// provider is present in the surface but inert until
-    /// [`Server::with_buttplug`] replaces it (production wiring in
-    /// `main` always does).
+    /// A server with the Lovense provider wired; the Buttplug and
+    /// Server API providers are present in the surface but inert
+    /// until [`Server::with_buttplug`] / [`Server::with_server_api`]
+    /// replace them (production wiring in `main` always does).
     pub fn new(config: Config, transport: Option<Box<dyn Transport>>) -> Server {
         let lovense = LovenseProvider::new(&config, transport);
         Server {
             config,
-            lovense,
-            buttplug: Box::new(InertProvider::unavailable(
+            lovense: Arc::new(lovense),
+            buttplug: Arc::new(InertProvider::unavailable(
                 ProviderId::Buttplug,
                 "no buttplug provider is wired in this server",
             )),
-            state: Mutex::new(SafetyState::new()),
+            server_api: Arc::new(InertProvider::disabled(
+                ProviderId::ServerApi,
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
+            )),
+            pairing: Arc::new(NoPairing::disabled(
+                "server api provider is disabled by configuration \
+                 ([server_api] enabled = false); local routes remain the default",
+            )),
+            state: Arc::new(Mutex::new(SafetyState::new())),
+            output_lock: Arc::new(Mutex::new(())),
+            score: Mutex::new(None),
         }
     }
 
     /// Wire the Buttplug provider behind the seam.
     #[must_use]
     pub fn with_buttplug(mut self, buttplug: Box<dyn DeviceProvider>) -> Server {
-        self.buttplug = buttplug;
+        self.buttplug = Arc::from(buttplug);
+        self
+    }
+
+    /// Wire the Server API provider behind the seam (D-1451).
+    #[must_use]
+    pub fn with_server_api(mut self, server_api: Box<dyn DeviceProvider>) -> Server {
+        self.server_api = Arc::from(server_api);
+        self
+    }
+
+    /// Wire the Server API pairing surface alongside its provider.
+    #[must_use]
+    pub fn with_pairing(mut self, pairing: Box<dyn PairingProvider>) -> Server {
+        self.pairing = Arc::from(pairing);
         self
     }
 
@@ -122,12 +169,14 @@ impl Server {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Whether output could reach a target at all: either provider
+    /// Whether output could reach a target at all: any provider
     /// can accept output. The Lovense half is the original rule (a
-    /// transport exists and the config gate permits it); the Buttplug
-    /// half is its probe.
+    /// transport exists and the config gate permits it); the other
+    /// providers answer with their probes.
     fn target_configured(&self) -> bool {
-        self.lovense.target_configured() || self.buttplug.probe().available
+        self.lovense.target_configured()
+            || self.buttplug.probe().available
+            || self.server_api.probe().available
     }
 
     fn snapshot(&self) -> crate::decide::GateSnapshot {
@@ -161,6 +210,14 @@ impl Server {
 
     fn dispatch(&self, name: &str, arguments: Option<&Value>) -> Result<Value, CallError> {
         match name {
+            "ache_score_start" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["parts"])?;
+                let parts: Vec<ScorePart> =
+                    serde_json::from_value(args.get("parts").cloned().unwrap_or(Value::Null))
+                        .map_err(|e| (INVALID_PARAMS, format!("invalid score parts: {e}")))?;
+                Ok(self.start_score(&parts)?)
+            }
             "lovense_status" => {
                 check_no_arguments(arguments)?;
                 Ok(self.status())
@@ -190,6 +247,12 @@ impl Server {
                 check_fields_allowed(&args, &["device"])?;
                 let device = required_string(&args, "device")?;
                 Ok(self.device(&device)?)
+            }
+            "ache_pairing" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["action"])?;
+                let action = required_string(&args, "action")?;
+                Ok(self.pairing(&action)?)
             }
             "lovense_function" => {
                 let args = arguments_object(arguments)?;
@@ -258,8 +321,12 @@ impl Server {
             ),
         };
         let target = probe.and_then(|probe| probe.target);
+        let score_running = self.score.lock().unwrap().as_ref().is_some_and(|run| {
+            !*run.cancelled.lock().unwrap() && *run.remaining.lock().unwrap() > 0
+        });
         let safety = self.lock_state();
         json!({
+            "score_running": score_running,
             "state": state,
             "transport": self.config.transport.as_str(),
             "target": target,
@@ -272,11 +339,12 @@ impl Server {
             "watchdog_secs": self.config.watchdog_secs,
             "output_path": "gated: every output on every provider passes the one \
                 decide() gate; stop, disarm, the watchdog, a session drop, and \
-                shutdown each zero output on both providers and latch the master off",
+                shutdown each zero output on every provider and latch the master off",
             "note": note,
             "providers": {
                 "lovense": self.lovense.probe().to_json(),
                 "buttplug": self.buttplug.probe().to_json(),
+                "serverapi": self.server_api.probe().to_json(),
             },
             "server": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
@@ -310,8 +378,9 @@ impl Server {
         let mut enumerated = false;
         let mut first_error: Option<AcheError> = None;
         for provider in [
-            &self.lovense as &dyn DeviceProvider,
+            self.lovense.as_ref() as &dyn DeviceProvider,
             self.buttplug.as_ref() as &dyn DeviceProvider,
+            self.server_api.as_ref() as &dyn DeviceProvider,
         ] {
             let probe = provider.probe();
             let mut entry = Map::new();
@@ -347,6 +416,33 @@ impl Server {
         Ok(self.resolve_device(id)?.to_json())
     }
 
+    /// The Server API pairing surface (D-1451). `status` presents
+    /// pairing state — presence only, never a credential value.
+    /// `request_qr` is the explicit operator act that asks Lovense
+    /// for a QR code for the Owner to scan in the Remote app; it
+    /// pairs nothing itself and can cause no device output. The
+    /// provider's config enablement is the approval boundary: a
+    /// disabled provider's pairing surface refuses both actions.
+    fn pairing(&self, action: &str) -> Result<Value, AcheError> {
+        match action {
+            "status" => Ok(self.pairing.pairing_state().to_json()),
+            "request_qr" => {
+                let qr = self.pairing.request_qr()?;
+                Ok(json!({
+                    "qr": qr.to_json(),
+                    "note": "scan this code in Lovense Remote to pair; pairing \
+                        completes in the app, and the resulting user id is placed \
+                        in the password store at the configured uid entry as the \
+                        final step",
+                }))
+            }
+            other => Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                format!("pairing action {other:?} must be `status` or `request_qr`"),
+            )),
+        }
+    }
+
     /// Resolve a unified device id to the device, asking only the
     /// provider the id names. A provider that cannot enumerate
     /// surfaces its own typed error — absence is never claimed on the
@@ -361,13 +457,17 @@ impl Server {
             ));
         }
         let provider: &dyn DeviceProvider = if id.starts_with("lovense:") {
-            &self.lovense
+            self.lovense.as_ref()
         } else if id.starts_with("buttplug:") {
             self.buttplug.as_ref()
+        } else if id.starts_with("serverapi:") {
+            self.server_api.as_ref()
         } else {
             return Err(AcheError::new(
                 ErrorCode::RequestInvalid,
-                format!("device id {id:?} must start with `lovense:` or `buttplug:`"),
+                format!(
+                    "device id {id:?} must start with `lovense:`, `buttplug:`, or `serverapi:`"
+                ),
             ));
         };
         let devices = provider.discover()?;
@@ -436,38 +536,45 @@ impl Server {
     /// send is a session drop (state still zeroes; the error surfaces).
     /// Returns whether a stop body was actually sent.
     fn zero_output(&self, event: &str) -> Result<bool, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
         let sent = self.send_stop_strict()?;
         self.lock_state().zero_and_disarm(event);
         Ok(sent)
     }
 
-    /// Zero every provider. Both providers are ALWAYS attempted, even
-    /// when the first fails: a panic stop that leaves the second
+    /// Zero every provider. All providers are ALWAYS attempted, even
+    /// when the first fails: a panic stop that leaves another
     /// provider running because the first one's send failed is not a
     /// stop. `Ok(false)` means no provider had a target to zero: the
-    /// local zero still stands. A zero failure on either provider
+    /// local zero still stands. A zero failure on any provider
     /// marks the session dropped; the first failure is the error.
     fn send_stop_strict(&self) -> Result<bool, AcheError> {
+        self.cancel_score();
         let lovense = self.lovense.zero();
         let buttplug = self.buttplug.zero();
-        match (lovense, buttplug) {
-            (Ok(lovense_sent), Ok(buttplug_sent)) => Ok(lovense_sent || buttplug_sent),
-            (Err(error), _) | (_, Err(error)) => {
+        let server_api = self.server_api.zero();
+        match (lovense, buttplug, server_api) {
+            (Ok(lovense_sent), Ok(buttplug_sent), Ok(server_api_sent)) => {
+                Ok(lovense_sent || buttplug_sent || server_api_sent)
+            }
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                 self.lock_state().on_session_drop();
                 Err(error)
             }
         }
     }
 
-    /// Best-effort zero on both providers, for the paths that must
+    /// Best-effort zero on every provider, for the paths that must
     /// never fail: a watchdog trip, shutdown, recovery after a drop.
-    /// Both are attempted even when one fails (never short-circuited).
+    /// All are attempted even when one fails (never short-circuited).
     /// State has already been zeroed by the caller; a failure here
     /// means the session is gone and is recorded as a drop.
     fn send_stop_best_effort(&self) {
+        self.cancel_score();
         let lovense_failed = self.lovense.zero().is_err();
         let buttplug_failed = self.buttplug.zero().is_err();
-        if lovense_failed || buttplug_failed {
+        let server_api_failed = self.server_api.zero().is_err();
+        if lovense_failed || buttplug_failed || server_api_failed {
             self.lock_state().on_session_drop();
         }
     }
@@ -480,8 +587,15 @@ impl Server {
     /// (`decide_plan`) and executed by the device's provider. A deny is
     /// final and sends nothing, on either path. A send failure is a
     /// session drop: output state zeroes, the master latches off, and a
-    /// best-effort zero on both providers follows the failed command.
+    /// best-effort zero on every provider follows the failed command.
     fn run_output(&self, intent: OutputIntent, device: Option<&str>) -> Result<Value, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
+        if self.score_running() {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop the running score before other output",
+            ));
+        }
         let snapshot = self.snapshot();
         let Some(device_id) = device else {
             let (body, effective, clamped) = match decide(&snapshot, &intent) {
@@ -537,7 +651,178 @@ impl Server {
                     }),
                 )
             }
+            ProviderId::ServerApi => {
+                let effective = plan_effective(&plan);
+                self.finish_output(
+                    self.server_api.execute(&plan),
+                    json!({
+                        "sent": true,
+                        "provider": "serverapi",
+                        "device": target.id,
+                        "gate": { "decision": "allow", "clamped": clamped },
+                        "effective": effective,
+                    }),
+                )
+            }
         }
+    }
+
+    fn cancel_score(&self) {
+        if let Some(run) = self.score.lock().unwrap().take() {
+            *run.cancelled.lock().unwrap() = true;
+            run.wake.notify_all();
+        }
+    }
+
+    fn score_running(&self) -> bool {
+        self.score.lock().unwrap().as_ref().is_some_and(|run| {
+            !*run.cancelled.lock().unwrap() && *run.remaining.lock().unwrap() > 0
+        })
+    }
+
+    fn start_score(&self, parts: &[ScorePart]) -> Result<Value, AcheError> {
+        let _output = self.output_lock.lock().unwrap();
+        if self.lock_state().output_active() {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop active output before starting a score",
+            ));
+        }
+        let mut targets = Vec::new();
+        let mut devices = Vec::new();
+        for part in parts {
+            if let Ok(device) = self.resolve_device(&part.device) {
+                let selector = match device.provider {
+                    ProviderId::Lovense => device.id.strip_prefix("lovense:").unwrap().to_string(),
+                    ProviderId::ServerApi => {
+                        device.id.strip_prefix("serverapi:").unwrap().to_string()
+                    }
+                    ProviderId::Buttplug => device.id.clone(),
+                };
+                targets.push((device.id.clone(), selector, device.caps()));
+                devices.push(device);
+            }
+        }
+        let plans = decide_score(&self.snapshot(), parts, &targets)?;
+        let verdict: Vec<Value> = plans
+            .iter()
+            .map(|part| {
+                json!({
+                    "device": part.device,
+                    "segments": part.segments.iter().map(|p| json!({
+                        "effective": plan_effective(p), "clamped": p.clamped()
+                    })).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let run = Arc::new(ScoreRun {
+            cancelled: Mutex::new(false),
+            wake: Condvar::new(),
+            remaining: Mutex::new(plans.len()),
+        });
+        *self.score.lock().unwrap() = Some(run.clone());
+        self.lock_state().mark_output_started();
+        for part in plans {
+            let provider: Arc<dyn DeviceProvider> = match devices
+                .iter()
+                .find(|d| d.id == part.device)
+                .unwrap()
+                .provider
+            {
+                ProviderId::Lovense => self.lovense.clone(),
+                ProviderId::Buttplug => self.buttplug.clone(),
+                ProviderId::ServerApi => self.server_api.clone(),
+            };
+            let run = run.clone();
+            let output_lock = self.output_lock.clone();
+            let state = self.state.clone();
+            let lovense = self.lovense.clone();
+            let buttplug = self.buttplug.clone();
+            let server_api = self.server_api.clone();
+            // One independently waiting stream per device. Only sends are
+            // serialized; no stream owns the lock during its duration.
+            let spawned = std::thread::Builder::new()
+                .name("ache-score".into())
+                .spawn(move || {
+                    for (index, plan) in part.segments.iter().enumerate() {
+                        {
+                            let _output = output_lock.lock().unwrap();
+                            if *run.cancelled.lock().unwrap() {
+                                return;
+                            }
+                            let previous_zero = if index > 0 {
+                                let mut zero = part.segments[index - 1].clone();
+                                if let AllowedOutput::Function { strength, .. } = &mut zero {
+                                    *strength = 0;
+                                }
+                                provider.execute(&zero)
+                            } else {
+                                Ok(())
+                            };
+                            if previous_zero.and_then(|()| provider.execute(plan)).is_err() {
+                                *run.cancelled.lock().unwrap() = true;
+                                run.wake.notify_all();
+                                state.lock().unwrap().on_session_drop();
+                                let _ = lovense.zero();
+                                let _ = buttplug.zero();
+                                let _ = server_api.zero();
+                                return;
+                            }
+                        }
+                        let AllowedOutput::Function { time_sec, .. } = plan else {
+                            unreachable!()
+                        };
+                        let cancelled = run.cancelled.lock().unwrap();
+                        let (cancelled, _) = run
+                            .wake
+                            .wait_timeout_while(
+                                cancelled,
+                                Duration::from_secs(*time_sec as u64),
+                                |cancelled| !*cancelled,
+                            )
+                            .unwrap();
+                        if *cancelled {
+                            return;
+                        }
+                    }
+                    let _output = output_lock.lock().unwrap();
+                    if *run.cancelled.lock().unwrap() {
+                        return;
+                    }
+                    // Explicit per-device zero on completion, through an already
+                    // approved action and selector; never a broadcast part stop.
+                    let mut zero = part.segments.last().unwrap().clone();
+                    if let AllowedOutput::Function { strength, .. } = &mut zero {
+                        *strength = 0;
+                    }
+                    if provider.execute(&zero).is_err() {
+                        *run.cancelled.lock().unwrap() = true;
+                        run.wake.notify_all();
+                        state.lock().unwrap().on_session_drop();
+                        let _ = lovense.zero();
+                        let _ = buttplug.zero();
+                        let _ = server_api.zero();
+                        return;
+                    }
+                    let mut remaining = run.remaining.lock().unwrap();
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        state
+                            .lock()
+                            .unwrap()
+                            .zero_and_disarm("score completed; re-arm required");
+                    }
+                });
+            if let Err(error) = spawned {
+                self.lock_state().on_session_drop();
+                self.send_stop_best_effort();
+                return Err(AcheError::new(
+                    ErrorCode::RequestInvalid,
+                    format!("score worker failed: {error}"),
+                ));
+            }
+        }
+        Ok(json!({"gate": {"decision": "allow"}, "parts": verdict, "started": true}))
     }
 
     /// The shared tail of every output path: on success the output is
@@ -565,6 +850,7 @@ impl Server {
     /// zero the state, latch off, then send the wire zero. Returns
     /// true exactly when it tripped.
     pub fn trip_watchdog(&self) -> bool {
+        let _output = self.output_lock.lock().unwrap();
         let tripped = self
             .lock_state()
             .trip_watchdog_if_expired(self.config.watchdog_secs);
@@ -582,6 +868,7 @@ impl Server {
     /// The explicit shutdown path: input ended while output is active.
     /// Zero it and say so on stderr — no skipped cleanup.
     pub fn zero_on_shutdown(&self) -> bool {
+        let _output = self.output_lock.lock().unwrap();
         if !self.output_active() {
             return false;
         }
@@ -601,6 +888,11 @@ fn retarget(intent: OutputIntent, device: &Device) -> OutputIntent {
         ProviderId::Lovense => device
             .id
             .strip_prefix("lovense:")
+            .unwrap_or(&device.id)
+            .to_string(),
+        ProviderId::ServerApi => device
+            .id
+            .strip_prefix("serverapi:")
             .unwrap_or(&device.id)
             .to_string(),
         ProviderId::Buttplug => device.id.clone(),
@@ -689,6 +981,27 @@ pub(crate) fn tool_list() -> Value {
         "minimum": 1,
         "maximum": 3600,
         "description": "Duration in seconds. Bounded: indefinite output does not exist here."
+    });
+    let score_tool = json!({
+        "name": "ache_score_start",
+        "description": "Atomically plan every part, then start concurrent per-device streams. Any refused part refuses the whole score. Stop with lovense_stop; heartbeat required. Stop active output before starting.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": false, "required": ["parts"],
+            "properties": {"parts": {"type": "array", "minItems": 1, "maxItems": 32,
+                "items": {"type": "object", "additionalProperties": false,
+                    "required": ["device", "segments"], "properties": {
+                        "device": {"type": "string"},
+                        "segments": {"type": "array", "minItems": 1, "maxItems": 128,
+                            "items": {"type": "object", "additionalProperties": false,
+                                "required": ["action", "level", "duration"], "properties": {
+                                    "action": {"type": "string"},
+                                    "level": {"type": "integer", "minimum": 0},
+                                    "duration": {"type": "integer", "minimum": 1, "maximum": 3600}
+                                }}}
+                    }}}}
+        },
+        "annotations": {"title": "Start score", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
     });
     json!([
         {
@@ -857,8 +1170,8 @@ pub(crate) fn tool_list() -> Value {
         },
         {
             "name": "lovense_stop",
-            "description": "Panic zero: stop every function on every device on both \
-                providers, synchronously, and latch the master off so recovery is a \
+            "description": "Panic zero: stop every function on every device on every \
+                provider, synchronously, and latch the master off so recovery is a \
                 fresh explicit arm. Always available — disarmed, unconfigured, \
                 mid-pattern — and never gated.",
             "inputSchema": no_arguments.clone(),
@@ -872,8 +1185,8 @@ pub(crate) fn tool_list() -> Value {
         },
         {
             "name": "ache_devices",
-            "description": "Discover every device across both providers (Lovense \
-                Standard API and embedded Buttplug), in one unified model: id, \
+            "description": "Discover every device across every provider (Lovense \
+                Standard API, embedded Buttplug, and the opt-in Server API), in one unified model: id, \
                 provider, name, battery, and capabilities as data — each capability \
                 carries its maximum on the unified 0..=20 strength scale, or null \
                 when the capability is reported but not mapped. A provider that \
@@ -911,6 +1224,37 @@ pub(crate) fn tool_list() -> Value {
                 "readOnlyHint": true,
                 "destructiveHint": false,
                 "idempotentHint": true,
+                "openWorldHint": true,
+            },
+        },
+        score_tool,
+        {
+            "name": "ache_pairing",
+            "description": "Server API pairing surface (D-1451). action \"status\": report \
+                pairing state — whether the developer token and the paired user id are \
+                present in the password store (presence only, never a value). action \
+                \"request_qr\": ask Lovense for a QR code for the Owner to scan in the \
+                Remote app — an explicit act that pairs nothing by itself and can cause \
+                no device output. Pairing completes in the app; the resulting user id \
+                is placed in the password store as the final step. A disabled Server \
+                API provider refuses with provider_unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "request_qr"],
+                        "description": "The pairing action."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+            "annotations": {
+                "title": "Server API pairing",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
                 "openWorldHint": true,
             },
         },
@@ -1025,7 +1369,7 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-/// Whether `name` is one of the ten served tools. The era guard
+/// Whether `name` is one of the twelve served tools. The era guard
 /// asks before forwarding a `tools/call`; dispatch trusts it.
 pub(crate) fn is_known_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
@@ -1101,7 +1445,7 @@ mod tests {
     // --- validation ---------------------------------------------------
 
     #[test]
-    fn tools_list_is_exactly_the_ten_tools_with_full_schemas() {
+    fn tools_list_is_exactly_the_twelve_tools_with_full_schemas() {
         let listed = tool_list();
         let tools = listed.as_array().unwrap();
         let names: Vec<&str> = tools
@@ -1153,7 +1497,7 @@ mod tests {
         assert_eq!(status["session_health"], "ok");
         assert_eq!(status["intensity_ceiling"], 20);
         assert_eq!(status["watchdog_secs"], 5);
-        assert_eq!(status["server"]["version"], "1.0.0");
+        assert_eq!(status["server"]["version"], "1.2.0");
         assert!(!status.to_string().contains("connected"));
     }
 
@@ -2178,5 +2522,1114 @@ mod tests {
         let (_, is_error) = payload(&call(&server, "lovense_function", args));
         assert!(!is_error, "the legacy path keeps its historical reach");
         assert_eq!(sent.lock().unwrap().len(), 1);
+    }
+
+    // --- step 4: the Server API provider (D-1451) --------------------
+
+    use crate::provider_server_api::FakeServerApi;
+
+    /// The wire bodies the fixture provider recorded, in order.
+    fn bodies(fixture: &FakeServerApi) -> Vec<Value> {
+        fixture.sent_log().lock().unwrap().clone()
+    }
+
+    /// Poll until the fixture records a body (score streams start
+    /// on their own threads), bounded so a broken stream fails the
+    /// test instead of hanging it.
+    fn wait_for_bodies(fixture: &FakeServerApi) {
+        for _ in 0..400 {
+            if !bodies(fixture).is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the fixture recorded no body within the bound");
+    }
+
+    fn server_with_fixture_server_api() -> (Server, FakeServerApi) {
+        let fixture = FakeServerApi::new();
+        let server = Server::new(Config::default(), Some(Box::new(MockTransport::new())))
+            .with_server_api(Box::new(fixture.clone()))
+            .with_pairing(Box::new(fixture.clone()));
+        (server, fixture)
+    }
+
+    #[test]
+    fn serverapi_disabled_by_default_reports_typed_and_blocks_nothing_else() {
+        let server = server_for(Config::default());
+        let status = status_of(&server);
+        assert_eq!(status["providers"]["serverapi"]["available"], false);
+        assert_eq!(status["providers"]["serverapi"]["state"], "disabled");
+        // Enumeration still succeeds through the other providers,
+        // with the disabled provider's typed error in its own entry.
+        let (devices, is_error) = payload(&call(&server, "ache_devices", json!({})));
+        assert!(!is_error);
+        assert_eq!(
+            devices["providers"]["serverapi"]["error"]["code"],
+            "provider_unavailable"
+        );
+        // Pairing refuses cleanly while disabled.
+        let (body, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "request_qr"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "provider_unavailable");
+    }
+
+    #[test]
+    fn serverapi_output_routes_through_the_gate_and_stop_zeroes_it() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 99, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(!is_error, "{body}");
+        assert_eq!(body["provider"], "serverapi");
+        assert_eq!(body["effective"]["strength"], 20);
+        assert_eq!(body["gate"]["clamped"], true);
+        {
+            let bodies = bodies(&fixture);
+            assert_eq!(bodies.len(), 1);
+            assert_eq!(bodies[0]["command"], "Function");
+            assert_eq!(bodies[0]["action"], "Vibrate:20");
+            assert_eq!(bodies[0]["toy"], "fixture-lush");
+            assert_eq!(bodies[0]["token"], "fixture-token");
+            assert_eq!(bodies[0]["uid"], "fixture-uid");
+        }
+        let (_, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.last().unwrap()["action"], "Stop");
+    }
+
+    #[test]
+    fn serverapi_pairing_status_and_qr_come_from_the_fixture() {
+        let (server, _fixture) = server_with_fixture_server_api();
+        let (state, is_error) =
+            payload(&call(&server, "ache_pairing", json!({"action": "status"})));
+        assert!(!is_error);
+        assert_eq!(state["provider"], "serverapi");
+        assert_eq!(state["token_present"], true);
+        assert_eq!(state["uid_present"], true);
+        assert_eq!(state["paired"], true);
+        assert_eq!(state["qr_issued"], false);
+        let (issued, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "request_qr"}),
+        ));
+        assert!(!is_error, "{issued}");
+        assert_eq!(issued["qr"]["code"], "000000");
+        let (state, _) = payload(&call(&server, "ache_pairing", json!({"action": "status"})));
+        assert_eq!(state["qr_issued"], true);
+    }
+
+    #[test]
+    fn adversarial_serverapi_output_while_disarmed_sends_nothing() {
+        let (server, fixture) = server_with_fixture_server_api();
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "not_armed");
+        assert!(bodies(&fixture).is_empty());
+    }
+
+    #[test]
+    fn adversarial_serverapi_send_failure_drops_session_and_still_zeroes() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        fixture
+            .fail_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (body, is_error) = payload(&call(
+            &server,
+            "lovense_function",
+            json!({"feature": "Vibrate", "strength": 5, "time_sec": 5,
+                    "device": "serverapi:fixture-lush"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "target_unreachable");
+        // The failed command still drove the zero onto the wire:
+        // the fixture recorded the function body, then the stop.
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[1]["action"], "Stop");
+        assert!(!server.lock_state().armed());
+    }
+
+    #[test]
+    fn adversarial_serverapi_pairing_refuses_unknown_actions_and_fields() {
+        let (server, _fixture) = server_with_fixture_server_api();
+        // An unknown action is an operational refusal: there is no
+        // "complete pairing" verb to smuggle a uid in through.
+        let (body, is_error) = payload(&call(
+            &server,
+            "ache_pairing",
+            json!({"action": "complete"}),
+        ));
+        assert!(is_error);
+        assert_eq!(body["error"]["code"], "request_invalid");
+        // Extra or missing fields are protocol misuse.
+        for args in [json!({"action": "status", "uid": "attacker"}), json!({})] {
+            let response = call(&server, "ache_pairing", args);
+            assert_eq!(response["error"]["code"], INVALID_PARAMS, "{response}");
+        }
+    }
+
+    #[test]
+    fn serverapi_score_part_streams_and_stops_with_the_ensemble() {
+        let (server, fixture) = server_with_fixture_server_api();
+        arm(&server);
+        let (_, is_error) = payload(&call(
+            &server,
+            "ache_score_start",
+            json!({"parts": [{"device": "serverapi:fixture-lush",
+                "segments": [{"action": "Vibrate", "level": 5, "duration": 30}]}]}),
+        ));
+        assert!(!is_error);
+        wait_for_bodies(&fixture);
+        assert_eq!(bodies(&fixture)[0]["command"], "Function");
+        assert_eq!(bodies(&fixture)[0]["action"], "Vibrate:5");
+        let (_, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        let bodies = bodies(&fixture);
+        assert_eq!(bodies.last().unwrap()["action"], "Stop");
+    }
+}
+
+// ---------------------------------------------------------------------
+// AC-2 — "Stop is immediate and never gated" (plan ache.md, AC-2).
+//
+// The battery below closes the state enumeration for the stop
+// guarantee. The pre-existing tests already proved several states
+// (gate-level allow in decide.rs, idempotent stop, mid-pattern stop
+// latency, watchdog expiry, session drop, shutdown, cross-provider
+// zero); this module adds the states that battery did not name:
+//
+//   * a single stop matrix over every idle/active session state,
+//     each with the same oracle: the wire zero is present BEFORE the
+//     stop call answers (synchronous), the call lands inside the
+//     estate's 1 s CI-safe immediacy bound, the master latches off,
+//     a second stop is equally available, and no output can follow
+//     without a fresh explicit arm;
+//   * heartbeat HEALTHY (inside the watchdog window): output is
+//     not zeroed early, and stop is still the next wire command;
+//   * heartbeat LOST, both ways it can be observed: the watchdog
+//     timer path zeroes with no further request at all, and a stop
+//     that is itself the first call after the loss is not swallowed
+//     by the watchdog trip that dispatch performs first;
+//   * stop after a session drop (degraded session): degradation
+//     does not gate stop;
+//   * stop with no target configured at all: a local zero, reported
+//     honestly as `stop_sent: false`, never a refusal;
+//   * the gate-level matrix completed to all four armed x target
+//     combinations (the pre-existing test covered three);
+//   * unified (Buttplug fixture) sessions: stop from an active
+//     function and from an active pattern, with pattern cancel.
+//
+// Everything here is silent and hardware-free: the Lovense side is
+// the mock transport's recorded wire log and the Buttplug side is
+// the fixture provider. No real device is contacted, nothing is
+// actuated, and no sound is produced. The stop/gate semantics under
+// test are NOT changed by this module — it only observes them.
+#[cfg(test)]
+mod ac2_stop_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Value, json};
+
+    use super::Server;
+    use crate::config::{Config, TransportKind};
+    use crate::decide::{Decision, GateSnapshot, OutputIntent, decide};
+    use crate::provider::FakeButtplug;
+    use crate::transport::{MockTransport, from_config};
+
+    /// The immediacy bound the pre-existing mid-pattern stop test
+    /// established (1 s, CI-safe). AC-2 holds every state to it.
+    const STOP_BOUND: Duration = Duration::from_secs(1);
+
+    fn call(server: &Server, name: &str, arguments: Value) -> Value {
+        match server.dispatch_call(name, Some(arguments)) {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": 7, "result": result}),
+            Err((code, message)) => {
+                json!({"jsonrpc": "2.0", "id": 7, "error": {"code": code, "message": message}})
+            }
+        }
+    }
+
+    fn payload(response: &Value) -> (Value, bool) {
+        let result = &response["result"];
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        (
+            serde_json::from_str(text).unwrap(),
+            result["isError"].as_bool().unwrap(),
+        )
+    }
+
+    fn status_of(server: &Server) -> Value {
+        payload(&call(server, "lovense_status", json!({}))).0
+    }
+
+    fn arm(server: &Server) {
+        let (_, is_error) = payload(&call(server, "lovense_arm", json!({})));
+        assert!(!is_error, "arm must succeed here");
+    }
+
+    fn function_args(strength: i64) -> Value {
+        json!({"feature": "Vibrate", "strength": strength, "time_sec": 30})
+    }
+
+    fn mock_server() -> (Server, Arc<Mutex<Vec<Value>>>) {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        (Server::new(Config::default(), Some(Box::new(mock))), sent)
+    }
+
+    /// The AC-2 oracle, applied identically from every state: stop
+    /// answers successfully inside the bound, the wire zero is
+    /// already recorded when it answers (synchronous — not queued,
+    /// not deferred), the state is zeroed and latched off, a repeat
+    /// stop is just as available, and output afterwards is denied
+    /// `not_armed` and sends nothing.
+    fn assert_stop_zeroes(
+        server: &Server,
+        sent: &Arc<Mutex<Vec<Value>>>,
+        wire_before: usize,
+        state: &str,
+    ) {
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            wire_before,
+            "{state}: wire count before stop"
+        );
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(server, "lovense_stop", json!({})));
+        let elapsed = started.elapsed();
+        assert!(!is_error, "{state}: stop must never be refused");
+        assert_eq!(stopped["stop_sent"], true, "{state}: a zero was sent");
+        assert_eq!(stopped["armed"], false, "{state}: stop result latches off");
+        assert_eq!(stopped["output_active"], false, "{state}");
+        assert!(
+            elapsed < STOP_BOUND,
+            "{state}: stop immediacy bound exceeded: {elapsed:?}"
+        );
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(
+                sent.len(),
+                wire_before + 1,
+                "{state}: the zero is on the wire before stop answers"
+            );
+            assert_eq!(sent[wire_before]["command"], "Function", "{state}");
+            assert_eq!(sent[wire_before]["action"], "Stop", "{state}");
+            assert_eq!(sent[wire_before]["timeSec"], 0, "{state}");
+        }
+        let status = status_of(server);
+        assert_eq!(
+            status["armed"], false,
+            "{state}: stop latches the master off"
+        );
+        assert_eq!(status["output_active"], false, "{state}");
+
+        // Idempotent from the zeroed state too, on the same terms.
+        let (stopped, is_error) = payload(&call(server, "lovense_stop", json!({})));
+        assert!(!is_error, "{state}: a repeat stop must never be refused");
+        assert_eq!(stopped["stop_sent"], true, "{state}");
+        assert_eq!(sent.lock().unwrap().len(), wire_before + 2, "{state}");
+
+        // Nothing resumes and nothing is queued behind the stop:
+        // output without a fresh explicit arm is denied and silent.
+        let (error, is_error) = payload(&call(server, "lovense_function", function_args(5)));
+        assert!(is_error, "{state}");
+        assert_eq!(error["error"]["code"], "not_armed", "{state}");
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            wire_before + 2,
+            "{state}: a denied call sends nothing"
+        );
+    }
+
+    // --- the state matrix -------------------------------------------
+
+    #[test]
+    fn ac2_stop_matrix_from_every_idle_and_active_state() {
+        // Idle, never armed.
+        let (server, sent) = mock_server();
+        assert_stop_zeroes(&server, &sent, 0, "idle, never armed");
+
+        // Idle, armed, no output started.
+        let (server, sent) = mock_server();
+        arm(&server);
+        assert_stop_zeroes(&server, &sent, 0, "idle, armed");
+
+        // Active function, heartbeat healthy (just started).
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(9)));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "active function");
+
+        // Active preset.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(
+            &server,
+            "lovense_preset",
+            json!({"name": "pulse", "time_sec": 30}),
+        ));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "active preset");
+
+        // Mid-pattern: a 30 s pattern whose output is still active
+        // when stop arrives.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(
+            &server,
+            "lovense_pattern",
+            json!({"features": "v", "interval_ms": 400, "strengths": [10, 10], "time_sec": 30}),
+        ));
+        assert_eq!(status_of(&server)["output_active"], true);
+        assert_stop_zeroes(&server, &sent, 1, "mid-pattern");
+
+        // Already disarmed (disarm sent its own zero): an explicit
+        // stop afterwards is still available and still sends.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(9)));
+        payload(&call(&server, "lovense_disarm", json!({})));
+        assert_stop_zeroes(&server, &sent, 2, "after disarm");
+    }
+
+    #[test]
+    fn ac2_gate_allows_stop_in_all_four_state_combinations() {
+        // decide.rs covered three of the four armed x target
+        // combinations; the armed-without-a-target corner completes
+        // the gate matrix, at both ceiling edges.
+        for armed in [false, true] {
+            for target_configured in [false, true] {
+                for ceiling in [0, 20] {
+                    let snapshot = GateSnapshot {
+                        armed,
+                        target_configured,
+                        ceiling,
+                    };
+                    let Decision::Allow { body, .. } = decide(&snapshot, &OutputIntent::Stop)
+                    else {
+                        panic!(
+                            "stop denied for armed={armed} target={target_configured} \
+                             ceiling={ceiling}"
+                        );
+                    };
+                    assert_eq!(body["action"], "Stop");
+                    assert_eq!(body["timeSec"], 0);
+                }
+            }
+        }
+    }
+
+    // --- heartbeat states ---------------------------------------------
+
+    #[test]
+    fn ac2_heartbeat_healthy_keeps_output_and_stop_is_next() {
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        // Inside the 5 s window: no trip, output survives.
+        server.lock_state().backdate_activity(4);
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 0);
+        assert_eq!(
+            status["output_active"], true,
+            "a healthy heartbeat must not zero early"
+        );
+        assert_eq!(sent.lock().unwrap().len(), 1, "no zero was sent early");
+        // A fresh sign of life, then stop on the usual terms.
+        server.lock_state().note_activity();
+        assert_stop_zeroes(&server, &sent, 1, "heartbeat healthy");
+    }
+
+    #[test]
+    fn ac2_heartbeat_loss_zeroes_with_no_further_call_then_stop_still_works() {
+        // The timer path (service.rs polls `trip_watchdog`): silence
+        // alone stops the device — heartbeat loss MUST stop it, with
+        // no tool call involved.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        server.lock_state().backdate_activity(6);
+        assert!(
+            server.trip_watchdog(),
+            "the watchdog must trip on heartbeat loss"
+        );
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 2);
+            assert_eq!(
+                sent[1]["action"], "Stop",
+                "heartbeat loss sends the wire zero"
+            );
+        }
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["output_active"], false);
+        assert_eq!(status["armed"], false);
+        // And after the trip, an explicit stop is still available.
+        assert_stop_zeroes(&server, &sent, 2, "after watchdog trip");
+        assert_eq!(
+            status_of(&server)["watchdog_trips"],
+            1,
+            "stop does not re-trip"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_as_first_call_after_heartbeat_loss_is_not_swallowed() {
+        // Dispatch trips an expired watchdog BEFORE routing any
+        // call. When that call is itself lovense_stop, the trip must
+        // not consume or replace it: the trip's best-effort zero and
+        // the stop's own synchronous zero both land, in that order,
+        // and stop answers as a success.
+        let (server, sent) = mock_server();
+        arm(&server);
+        payload(&call(&server, "lovense_function", function_args(8)));
+        server.lock_state().backdate_activity(6);
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(started.elapsed() < STOP_BOUND);
+        assert!(!is_error, "stop after heartbeat loss must not be refused");
+        assert_eq!(stopped["stop_sent"], true);
+        {
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 3, "function, watchdog zero, stop zero");
+            assert_eq!(sent[1]["action"], "Stop");
+            assert_eq!(sent[2]["action"], "Stop");
+        }
+        let status = status_of(&server);
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["output_active"], false);
+    }
+
+    // --- degraded and unconfigured states ------------------------------
+
+    #[test]
+    fn ac2_stop_after_session_drop_is_not_gated_by_degradation() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fail = mock.fail_flag();
+        let server = Server::new(Config::default(), Some(Box::new(mock)));
+        arm(&server);
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let args =
+            json!({"features": "v", "interval_ms": 400, "strengths": [10, 10], "time_sec": 30});
+        let (error, is_error) = payload(&call(&server, "lovense_pattern", args));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unreachable");
+        // The transport recovers; the session stays degraded. A
+        // degraded session is exactly when a caller reaches for
+        // stop — degradation must not gate it.
+        fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(status_of(&server)["session_health"], "degraded");
+        assert_stop_zeroes(&server, &sent, 2, "after session drop (degraded)");
+        assert_eq!(
+            status_of(&server)["session_health"],
+            "degraded",
+            "stop works in a degraded session; it does not silently heal it"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_with_no_target_is_a_local_zero_not_a_refusal() {
+        // Real transport, no host: nothing can reach any wire. Arm
+        // is refused (no target), but stop is not gated on a target
+        // existing — it zeroes locally, reports honestly that no
+        // zero could be sent, and succeeds.
+        let config = Config {
+            transport: TransportKind::Real,
+            host: String::new(),
+            ..Config::default()
+        };
+        let transport = from_config(&config);
+        assert!(transport.is_none(), "no host means no transport");
+        let server = Server::new(config, transport);
+        let (error, is_error) = payload(&call(&server, "lovense_arm", json!({})));
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "target_unconfigured");
+        let started = Instant::now();
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(started.elapsed() < STOP_BOUND);
+        assert!(!is_error, "stop with no target must not be refused");
+        assert_eq!(
+            stopped["stop_sent"], false,
+            "no target: nothing could be sent"
+        );
+        assert_eq!(stopped["armed"], false);
+        assert_eq!(stopped["output_active"], false);
+        let status = status_of(&server);
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["output_active"], false);
+    }
+
+    // --- unified provider states ----------------------------------------
+
+    #[test]
+    fn ac2_stop_zeroes_a_unified_buttplug_function_session() {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let server =
+            Server::new(Config::default(), Some(Box::new(mock))).with_buttplug(Box::new(fake));
+        arm(&server);
+        let args =
+            json!({"feature": "Vibrate", "strength": 8, "time_sec": 30, "device": "buttplug:0"});
+        let (_, is_error) = payload(&call(&server, "lovense_function", args));
+        assert!(!is_error);
+        assert_eq!(*zeros.lock().unwrap(), 0, "no zero before stop");
+        // The Lovense half of the oracle still applies (stop zeroes
+        // BOTH providers synchronously); the Buttplug half is the
+        // zero count.
+        assert_stop_zeroes(&server, &sent, 0, "unified buttplug function");
+        assert!(
+            *zeros.lock().unwrap() >= 1,
+            "the buttplug provider was zeroed by stop"
+        );
+    }
+
+    #[test]
+    fn ac2_stop_cancels_a_unified_buttplug_pattern() {
+        let fake = FakeButtplug::new();
+        let zeros = fake.zero_log();
+        let cancelled = fake.pattern_cancelled_flag();
+        let server = Server::new(Config::default(), Some(Box::new(MockTransport::new())))
+            .with_buttplug(Box::new(fake));
+        arm(&server);
+        let args = json!({
+            "features": "v", "interval_ms": 400, "strengths": [10, 10],
+            "time_sec": 30, "device": "buttplug:0"
+        });
+        let (_, is_error) = payload(&call(&server, "lovense_pattern", args));
+        assert!(!is_error);
+        assert!(!*cancelled.lock().unwrap(), "the pattern is still running");
+        let (stopped, is_error) = payload(&call(&server, "lovense_stop", json!({})));
+        assert!(!is_error);
+        assert_eq!(stopped["stop_sent"], true);
+        assert!(*zeros.lock().unwrap() >= 1, "the provider was zeroed");
+        assert!(
+            *cancelled.lock().unwrap(),
+            "stop cancels the running pattern, it does not let it play out"
+        );
+        assert_eq!(status_of(&server)["output_active"], false);
+        assert_eq!(status_of(&server)["armed"], false);
+    }
+}
+
+#[cfg(test)]
+mod score_tests {
+    use super::*;
+    use crate::decide::{GateSnapshot, ScoreSegment, TargetCaps};
+    use crate::provider::{Capability, ProviderProbe, bind_capabilities};
+    use crate::transport::MockTransport;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    #[derive(Clone)]
+    struct Quartet {
+        log: Arc<Mutex<Vec<AllowedOutput>>>,
+        fail: Arc<AtomicBool>,
+    }
+    impl Quartet {
+        fn new() -> Self {
+            Self {
+                log: Arc::default(),
+                fail: Arc::default(),
+            }
+        }
+    }
+    fn devices() -> Vec<Device> {
+        [
+            ("Lush 4", "Vibrate"),
+            ("Domi 2", "Vibrate"),
+            ("Flexer", "Rotate"),
+            ("Nora", "Rotate"),
+        ]
+        .iter()
+        .map(|(name, action)| {
+            let mut capabilities = vec![Capability {
+                feature: action.to_string(),
+                max: Some(20),
+                native: action.to_string(),
+                steps: None,
+            }];
+            bind_capabilities(&format!("Lovense {name}"), &mut capabilities);
+            Device {
+                id: format!("buttplug:{name}"),
+                provider: ProviderId::Buttplug,
+                name: name.to_string(),
+                kind: Some(format!("Lovense {name}")),
+                battery: None,
+                capabilities,
+                capability_source: "fixture",
+            }
+        })
+        .collect()
+    }
+    impl DeviceProvider for Quartet {
+        fn probe(&self) -> ProviderProbe {
+            ProviderProbe {
+                provider: ProviderId::Buttplug,
+                state: "mock",
+                available: true,
+                note: "quartet fixture".into(),
+            }
+        }
+        fn discover(&self) -> Result<Vec<Device>, AcheError> {
+            Ok(devices())
+        }
+        fn execute(&self, plan: &AllowedOutput) -> Result<(), AcheError> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(AcheError::new(
+                    ErrorCode::TargetUnreachable,
+                    "fixture disconnected",
+                ));
+            }
+            self.log.lock().unwrap().push(plan.clone());
+            Ok(())
+        }
+        fn zero(&self) -> Result<bool, AcheError> {
+            let mut log = self.log.lock().unwrap();
+            for device in devices() {
+                log.push(AllowedOutput::Function {
+                    feature: "Vibrate".into(),
+                    strength: 0,
+                    time_sec: 1,
+                    toy: device.id,
+                    clamped: false,
+                });
+            }
+            Ok(true)
+        }
+    }
+    fn parts(duration: i64) -> Vec<ScorePart> {
+        devices()
+            .iter()
+            .zip(["Vibrate", "Vibrate", "Fingering", "Rotate"])
+            .enumerate()
+            .map(|(i, (device, action))| ScorePart {
+                device: device.id.clone(),
+                segments: vec![ScoreSegment {
+                    action: action.into(),
+                    level: (i + 1) as i64 * 4,
+                    duration,
+                }],
+            })
+            .collect()
+    }
+    fn targets() -> Vec<(String, String, TargetCaps)> {
+        devices()
+            .into_iter()
+            .map(|d| (d.id.clone(), d.id.clone(), d.caps()))
+            .collect()
+    }
+    fn snapshot(armed: bool, ceiling: u8) -> GateSnapshot {
+        GateSnapshot {
+            armed,
+            ceiling,
+            target_configured: true,
+        }
+    }
+    fn setup() -> (Server, Quartet, Arc<Mutex<Vec<Value>>>) {
+        let mock = MockTransport::new();
+        let sent = mock.sent_log();
+        let fixture = Quartet::new();
+        let server = Server::new(Config::default(), Some(Box::new(mock)))
+            .with_buttplug(Box::new(fixture.clone()));
+        server.arm().unwrap();
+        (server, fixture, sent)
+    }
+    fn wait_for(predicate: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !predicate() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for score worker"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn nonzero(log: &[AllowedOutput]) -> usize {
+        log.iter()
+            .filter(|p| matches!(p, AllowedOutput::Function { strength: 1.., .. }))
+            .count()
+    }
+    fn assert_zeroed(fixture: &Quartet) {
+        let log = fixture.log.lock().unwrap();
+        for d in devices() {
+            let last = log
+                .iter()
+                .rev()
+                .find(|p| matches!(p, AllowedOutput::Function {toy, ..} if toy == &d.id))
+                .unwrap();
+            assert!(
+                matches!(last, AllowedOutput::Function { strength: 0, .. }),
+                "{} not zeroed",
+                d.id
+            );
+        }
+    }
+    // Validation (10): the intended behavior and the existing-command boundary.
+    #[test]
+    fn validation_quartet_plans_differentiated_reported_actions() {
+        let plan = decide_score(&snapshot(true, 20), &parts(2), &targets()).unwrap();
+        assert_eq!(plan.len(), 4);
+        for (part, expected) in plan.iter().zip([4, 8, 12, 16]) {
+            assert!(
+                matches!(part.segments[0], AllowedOutput::Function {strength, ..} if strength == expected)
+            );
+        }
+        assert!(
+            matches!(&plan[2].segments[0], AllowedOutput::Function {feature, ..} if feature == "Fingering")
+        );
+    }
+    #[test]
+    fn validation_ceiling_applies_to_every_part() {
+        let plan = decide_score(&snapshot(true, 6), &parts(1), &targets()).unwrap();
+        for (part, expected) in plan.iter().zip([4, 6, 6, 6]) {
+            assert!(
+                matches!(part.segments[0], AllowedOutput::Function {strength, ..} if strength == expected)
+            );
+        }
+    }
+    #[test]
+    fn validation_one_part_matches_single_command_and_wire() {
+        let (server, fixture, _) = setup();
+        let part = parts(2).remove(0);
+        let intent = OutputIntent::Function(FunctionIntent {
+            feature: "Vibrate".into(),
+            strength: 4,
+            time_sec: 2,
+            toy: Some(part.device.clone()),
+        });
+        let expected = decide_plan(&server.snapshot(), &intent, &devices()[0].caps()).unwrap();
+        server.start_score(&[part]).unwrap();
+        wait_for(|| !fixture.log.lock().unwrap().is_empty());
+        assert_eq!(fixture.log.lock().unwrap()[0], expected);
+        let lovense_parts = [ScorePart {
+            device: "lovense:mock-toy-1".into(),
+            segments: vec![ScoreSegment {
+                action: "Vibrate".into(),
+                level: 4,
+                duration: 2,
+            }],
+        }];
+        let plan = decide_score(
+            &snapshot(true, 20),
+            &lovense_parts,
+            &[(
+                "lovense:mock-toy-1".into(),
+                "mock-toy-1".into(),
+                devices()[0].caps(),
+            )],
+        )
+        .unwrap();
+        let single = decide_plan(
+            &snapshot(true, 20),
+            &OutputIntent::Function(FunctionIntent {
+                feature: "Vibrate".into(),
+                strength: 4,
+                time_sec: 2,
+                toy: Some("mock-toy-1".into()),
+            }),
+            &devices()[0].caps(),
+        )
+        .unwrap();
+        assert_eq!(lovense_wire(&plan[0].segments[0]), lovense_wire(&single));
+        server.stop().unwrap();
+    }
+    #[test]
+    fn validation_concurrent_streams_interleave_before_any_part_finishes() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        for part in &mut score {
+            part.segments.push(part.segments[0].clone());
+        }
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) >= 4);
+        {
+            let log = fixture.log.lock().unwrap();
+            let ids: std::collections::HashSet<_> = log[..4]
+                .iter()
+                .map(|p| match p {
+                    AllowedOutput::Function { toy, .. } => toy.clone(),
+                    _ => unreachable!(),
+                })
+                .collect();
+            assert_eq!(
+                ids.len(),
+                4,
+                "all first segments precede any second segment"
+            );
+        }
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) >= 8);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn validation_completion_zeroes_and_reports_idle() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(1)).unwrap();
+        wait_for(|| !server.output_active());
+        assert_zeroed(&fixture);
+        assert_eq!(server.status()["score_running"], false);
+    }
+    #[test]
+    fn validation_stop_zeroes_every_device_before_return() {
+        let (server, fixture, sent) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+        assert_eq!(sent.lock().unwrap().last().unwrap()["action"], "Stop");
+        assert!(!server.lock_state().armed());
+        assert!(!server.score_running());
+    }
+    #[test]
+    fn validation_healthy_heartbeat_preserves_ensemble() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.lock_state().backdate_activity(4);
+        assert!(!server.trip_watchdog());
+        assert!(server.score_running());
+        server.stop().unwrap();
+    }
+    #[test]
+    fn validation_tool_returns_clamped_plan_with_one_new_surface() {
+        let (mut server, fixture, _) = setup();
+        server.config.intensity_ceiling = 2;
+        let result = server.dispatch_call("ache_score_start", Some(json!({"parts": [
+            {"device": "buttplug:Flexer", "segments": [{"action": "Fingering", "level": 12, "duration": 1}]}]}))).unwrap();
+        assert_eq!(result["isError"], false);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["parts"][0]["segments"][0]["effective"]["strength"], 2);
+        assert_eq!(body["parts"][0]["segments"][0]["clamped"], true);
+        assert_eq!(TOOL_NAMES.len(), 12);
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+    }
+    // Adversarial (10): no partial starts, no stale output after a latch.
+    #[test]
+    fn adversarial_bad_parts_refuse_all_and_send_nothing_on_both_routes() {
+        let (server, fixture, sent) = setup();
+        let mut score = parts(1);
+        score[2].segments[0].action = "Heating".into();
+        score[3].segments[0].action = "Fingering".into();
+        let error = server.start_score(&score).unwrap_err();
+        let message = format!("{error:?}");
+        for name in ["Flexer", "Nora", "Heating", "Fingering"] {
+            assert!(message.contains(name), "{message}");
+        }
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(!server.output_active());
+    }
+    #[test]
+    fn adversarial_disarmed_refuses_every_part_without_send() {
+        let (server, fixture, sent) = setup();
+        server.lock_state().zero_and_disarm("test");
+        let error = server.start_score(&parts(1)).unwrap_err();
+        assert!(
+            error.to_json().to_string().contains("NotArmed")
+                || error.to_json().to_string().contains("not_armed")
+        );
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn adversarial_bounds_unknown_devices_and_reduced_capabilities() {
+        let mut cases = vec![vec![], parts(0), parts(3601), parts(i64::MAX)];
+        let mut unknown = parts(1);
+        unknown[0].device = "buttplug:missing".into();
+        cases.push(unknown);
+        let mut negative = parts(1);
+        negative[0].segments[0].level = -1;
+        cases.push(negative);
+        let mut reduced = parts(1);
+        reduced[0].segments[0].action = "Oscillate".into();
+        cases.push(reduced);
+        let mut empty = parts(1);
+        empty[0].segments.clear();
+        cases.push(empty);
+        for case in cases {
+            assert!(decide_score(&snapshot(true, 20), &case, &targets()).is_err());
+        }
+    }
+    #[test]
+    fn adversarial_duplicate_and_conflicting_output_refused() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        score.push(score[0].clone());
+        assert!(server.start_score(&score).is_err());
+        assert!(fixture.log.lock().unwrap().is_empty());
+        server.start_score(&parts(30)).unwrap();
+        assert!(server.start_score(&parts(1)).is_err());
+        assert!(
+            server
+                .run_output(
+                    OutputIntent::Function(FunctionIntent {
+                        feature: "Vibrate".into(),
+                        strength: 2,
+                        time_sec: 1,
+                        toy: None
+                    }),
+                    None
+                )
+                .is_err()
+        );
+        server.stop().unwrap();
+    }
+    #[test]
+    fn adversarial_watchdog_cancels_whole_ensemble_and_no_resume() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.lock_state().backdate_activity(6);
+        assert!(server.trip_watchdog());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(server.start_score(&parts(1)).is_err());
+    }
+    #[test]
+    fn adversarial_disconnect_reconnect_never_resumes_score() {
+        let (server, fixture, _) = setup();
+        fixture.fail.store(true, Ordering::SeqCst);
+        server.start_score(&parts(1)).unwrap();
+        wait_for(|| !server.output_active());
+        fixture.fail.store(false, Ordering::SeqCst);
+        let before = nonzero(&fixture.log.lock().unwrap());
+        assert!(server.start_score(&parts(1)).is_err());
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(nonzero(&fixture.log.lock().unwrap()), before);
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn adversarial_stop_then_rearm_does_not_revive_waiting_streams() {
+        let (server, fixture, _) = setup();
+        let mut score = parts(1);
+        for part in &mut score {
+            part.segments.push(part.segments[0].clone());
+        }
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        server.stop().unwrap();
+        let before = fixture.log.lock().unwrap().len();
+        server.arm().unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(fixture.log.lock().unwrap().len(), before);
+        assert_zeroed(&fixture);
+    }
+    #[test]
+    fn adversarial_malformed_score_rejects_unknown_fields_without_send() {
+        let (server, fixture, sent) = setup();
+        for args in [
+            json!({"parts": null}),
+            json!({"parts": [], "override": true}),
+            json!({"parts": [{"device": "buttplug:Lush 4", "segments": [{"action": "Vibrate", "level": 1, "duration": 1, "override": true}]}]}),
+        ] {
+            assert!(
+                server
+                    .dispatch_call("ache_score_start", Some(args))
+                    .is_err()
+            );
+        }
+        assert!(fixture.log.lock().unwrap().is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn validation_mixed_providers_start_and_stop_together() {
+        let (server, fixture, sent) = setup();
+        let mut score = parts(30);
+        score.push(ScorePart {
+            device: "lovense:mock-toy-1".into(),
+            segments: vec![ScoreSegment {
+                action: "Vibrate".into(),
+                level: 7,
+                duration: 30,
+            }],
+        });
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4 && sent.lock().unwrap().len() == 1);
+        assert_eq!(sent.lock().unwrap()[0]["toy"], "mock-toy-1");
+        server.stop().unwrap();
+        assert_zeroed(&fixture);
+        assert_eq!(sent.lock().unwrap().last().unwrap()["action"], "Stop");
+    }
+    #[test]
+    fn validation_action_transition_zeroes_previous_action() {
+        let (server, fixture, _) = setup();
+        let score = [ScorePart {
+            device: "buttplug:Flexer".into(),
+            segments: vec![
+                ScoreSegment {
+                    action: "Fingering".into(),
+                    level: 9,
+                    duration: 1,
+                },
+                ScoreSegment {
+                    action: "Rotate".into(),
+                    level: 3,
+                    duration: 1,
+                },
+            ],
+        }];
+        server.start_score(&score).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 2);
+        let log = fixture.log.lock().unwrap();
+        assert!(
+            matches!(&log[1], AllowedOutput::Function {feature, strength: 0, ..} if feature == "Fingering")
+        );
+        assert!(
+            matches!(&log[2], AllowedOutput::Function {feature, strength: 3, ..} if feature == "Rotate")
+        );
+        drop(log);
+        server.stop().unwrap();
+    }
+    #[test]
+    fn adversarial_stop_failure_still_zeroes_other_provider_and_cancels() {
+        let mock = MockTransport::new();
+        let fail = mock.fail_flag();
+        let fixture = Quartet::new();
+        let server = Server::new(Config::default(), Some(Box::new(mock)))
+            .with_buttplug(Box::new(fixture.clone()));
+        server.arm().unwrap();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        fail.store(true, Ordering::SeqCst);
+        assert!(server.stop().is_err());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(!server.lock_state().armed());
+    }
+    #[test]
+    fn adversarial_shutdown_cancels_all_parts_without_resume() {
+        let (server, fixture, _) = setup();
+        server.start_score(&parts(30)).unwrap();
+        wait_for(|| nonzero(&fixture.log.lock().unwrap()) == 4);
+        assert!(server.zero_on_shutdown());
+        assert_zeroed(&fixture);
+        assert!(!server.score_running());
+        assert!(server.start_score(&parts(1)).is_err());
     }
 }

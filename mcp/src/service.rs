@@ -38,12 +38,13 @@ use crate::server::{self, SERVER_NAME, SERVER_VERSION, Server};
 
 /// The handshake instructions text, carried over byte-for-byte from
 /// the pre-migration server's `initialize` result.
-const INSTRUCTIONS: &str = "ache — unified haptics: Lovense local Game Mode and an \
-    embedded Buttplug server behind one surface. Tools: lovense_status, \
+const INSTRUCTIONS: &str = "ache — unified haptics: Lovense local Game Mode, an \
+    embedded Buttplug server, and the opt-in Lovense Server API provider \
+    behind one surface. Tools: lovense_status, \
     lovense_toys, lovense_arm, lovense_disarm, lovense_function, \
     lovense_pattern, lovense_preset, lovense_stop, ache_devices, \
-    ache_device. Output is off by default: arm explicitly, every output \
-    on either provider passes the one safety gate that clamps intensity \
+    ache_device, ache_score_start, ache_pairing. Output is off by default: arm explicitly, every output \
+    on any provider passes the one safety gate that clamps intensity \
     to the configured ceiling, and stop always works.";
 
 /// How often the watchdog poller checks for an expired window. The
@@ -202,7 +203,7 @@ mod tests {
     #[test]
     fn tools_carry_the_served_names_and_annotations() {
         let tools = build_tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 12);
         let status = &tools[0];
         assert_eq!(status.name, "lovense_status");
         let annotations = status.annotations.as_ref().expect("annotations");
