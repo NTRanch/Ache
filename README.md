@@ -117,6 +117,49 @@ coverage research behind [TOYS.md](TOYS.md). Solace Pro is covered
 by the same gate vocabulary (Position / Stroke / Depth) and is
 driven wherever it reports those functions.
 
+### Other brands over BLE (embedded Buttplug provider)
+
+Any device in the pinned Buttplug device config (12.0.1) is driven
+through its raw outputs: vibrate → Vibrate, rotate → Rotate,
+oscillate → Oscillate, constrict → Pump (0–3). That already covers
+the plain-vibration families (Satisfyer, We-Vibe, Lelo, Magic
+Motion, Kiiroo Pearl, MysteryVibe, Svakom, JoyHub and the rest) and
+the thrusting machines whose config output is an oscillation speed
+(Hismith, Kiiroo PleasureDrive, Fredorch Rotary). Air-pulse toys such
+as Satisfyer, Lelo Sona and We-Vibe Melt expose only `vibrate` in
+that config, so ache drives them as Vibrate and does not claim a
+separate Suction.
+
+Named actions are bound per model only where the config documents
+them. Scope is toys for women (IoST Index census, 2026-11-25).
+
+| Device | Outputs (config) | Unified functions | Ceiling source |
+| --- | --- | --- | --- |
+| JoyHub RoseBUD | vibrate, rotate "Flicker", constrict "Suction" 0–5 | Vibrate, Rotate, Pump, **Suction** (on constrict) | unified 0–20; device 5 steps |
+| JoyHub RoseLin | vibrate, rotate, constrict "Suction" 0–4 | Vibrate, Rotate, Pump, **Suction** (on constrict) | unified 0–20; device 4 steps |
+| Eropair Thrusting Vibrating Dildo | oscillate "Thruster" 0–100, vibrate | Vibrate, Oscillate, **Thrusting** (on oscillate) | unified 0–20; device 100 steps |
+| Fredorch Device | hw_position_with_duration 0–15 (position only) | **Thrusting** only, as a stroke program | gate ceiling picks Fredorch native speed 1–20 one-to-one; travel is the device-reported 0–15 range |
+
+How Fredorch strokes: Thrusting *s* runs whole end-to-end
+traverses for `time_sec`, each asked for in Fredorch's own table
+time for speed *s* (buttplug_server `fredorch.rs`). Patterns do not
+drive it (that is refused by name). Buttplug's stop sends nothing
+to a position axis. So stop ends the program, and the traverse
+already in flight finishes: about 0.2 s at speed 20, up to 8 s at
+speed 1.
+
+Still refused, by class:
+
+- **Position / PositionWithDuration** on any other model. That
+  includes every stroker (The Handy, Kiiroo Keon/Onyx/Titan,
+  Lovense Solace Pro, TCode): they are out of scope, and ache
+  has no evidenced timing for them.
+- **Temperature** (JoyHub and Svakom heaters, Umove): there is no
+  unified heating function, and an intensity ceiling is not a
+  temperature limit.
+- **Led** (JoyHub Rainbow/Peacock): light, not haptics.
+- **Spray**: there is no unified function for fluid release.
+
 ## The Lovense surfaces, and which ones are ours
 
 Lovense publishes several unrelated API families. Keeping them

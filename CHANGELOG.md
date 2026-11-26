@@ -3,6 +3,20 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
+## Unreleased — devices: for-her BLE bindings (1.3.0 or 1.4.0, set at landing)
+
+- Four per-model bindings, each documented in the pinned Buttplug
+  config: JoyHub RoseBUD and RoseLin Suction → constrict, and the
+  Eropair Thrusting Vibrating Dildo Thrusting → oscillate.
+- Fredorch Device, a position-only thrusting machine, now takes
+  Thrusting as a bounded stroke program. Speed 1–20 maps one-to-one
+  to Fredorch's own speed table. Raw Position stays refused by name,
+  and so does every other position device, strokers included.
+- Temperature, Led and Spray remain reported-but-refused.
+  README "Toy coverage" now lists the BLE rows and the refusal for
+  each class.
+- Gates: 221 tests passing (210 unit + 2 manifest + 9 stdio smoke).
+
 ## 1.1.0 — 2026-11-14 — score layer: multi-toy symphony
 
 - Step 3, the score layer: multi-toy symphony is built into the

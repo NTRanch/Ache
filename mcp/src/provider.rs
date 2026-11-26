@@ -55,6 +55,20 @@ impl ProviderId {
 // tables: each binding also requires a runtime-enumerated native output.
 pub const MAPPING_EVIDENCE: &str = "https://docs.rs/crate/buttplug_server_device_config/12.0.1/source/device-config/protocols/lovense.yml";
 
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: IoST Index census 2026-11-25 (for-her families), the same pinned
+// 12.0.1 config. Each binding below is a feature `description` in that config
+// naming the action (RoseBUD/RoseLin "Suction", Eropair "Thruster"), except
+// Fredorch, whose only output is a position axis (see provider_buttplug).
+pub const JOYHUB_EVIDENCE: &str = "https://docs.rs/crate/buttplug_server_device_config/12.0.1/source/device-config/protocols/joyhub.yml";
+pub const HISMITH_MINI_EVIDENCE: &str = "https://docs.rs/crate/buttplug_server_device_config/12.0.1/source/device-config/protocols/hismith-mini.yml";
+pub const FREDORCH_EVIDENCE: &str =
+    "https://docs.rs/crate/buttplug_server/12.0.2/source/src/device/protocol_impl/fredorch.rs";
+
+/// The Buttplug output a stroke-generating binding drives. It is reported
+/// with `max: None` (refused by name) and only a named binding drives it.
+pub const POSITION_NATIVE: &str = "PositionWithDuration";
+
 #[derive(Clone, Copy, Debug)]
 pub struct ActionBinding {
     pub model: &'static str,
@@ -107,6 +121,34 @@ pub const ACTION_BINDINGS: &[ActionBinding] = &[
         max: 20,
         evidence: MAPPING_EVIDENCE,
     },
+    ActionBinding {
+        model: "JoyHub RoseBUD",
+        action: "Suction",
+        native: "Constrict",
+        max: 20,
+        evidence: JOYHUB_EVIDENCE,
+    },
+    ActionBinding {
+        model: "JoyHub RoseLin",
+        action: "Suction",
+        native: "Constrict",
+        max: 20,
+        evidence: JOYHUB_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Eropair Thrusting Vibrating Dildo",
+        action: "Thrusting",
+        native: "Oscillate",
+        max: 20,
+        evidence: HISMITH_MINI_EVIDENCE,
+    },
+    ActionBinding {
+        model: "Fredorch Device",
+        action: "Thrusting",
+        native: POSITION_NATIVE,
+        max: 20,
+        evidence: FREDORCH_EVIDENCE,
+    },
 ];
 
 pub fn action_binding(model: &str, action: &str) -> Option<&'static ActionBinding> {
@@ -125,9 +167,14 @@ pub fn bind_capabilities(model: &str, capabilities: &mut Vec<Capability>) {
         if capabilities.iter().any(|cap| cap.feature == binding.action) {
             continue;
         }
+        // A position axis is enumerated but never unified-mapped (max None),
+        // so only its named binding may publish a drivable capability.
         if let Some(cap) = capabilities
             .iter()
-            .find(|cap| cap.native == binding.native && cap.max.is_some())
+            .find(|cap| {
+                cap.native == binding.native
+                    && (cap.max.is_some() || binding.native == POSITION_NATIVE)
+            })
             .cloned()
         {
             capabilities.push(Capability {
@@ -829,7 +876,11 @@ mod step2_tests {
                 buttplug.execute(&b).unwrap();
             }
         }
-        assert_eq!(sent.lock().unwrap().len(), 25);
+        let driven = ACTION_BINDINGS
+            .iter()
+            .filter(|binding| binding.action != "RollingBead")
+            .count();
+        assert_eq!(sent.lock().unwrap().len(), 5 * driven);
     }
     #[test]
     fn named_route_reductions_appear_in_device_data() {
@@ -948,5 +999,259 @@ mod step2_tests {
         assert_eq!(d.caps().max_for("Suction"), None);
         let restored = device("Lovense Osci 2", vec![cap("Oscillate", 20)]);
         assert!(restored.reductions_json().is_empty());
+    }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: IoST Index census 2026-11-25 for-her scope; pinned 12.0.1 config
+// (joyhub.yml, hismith-mini.yml, fredorch.yml). Mock-only tests.
+#[cfg(test)]
+mod for_her_tests {
+    use super::*;
+    use crate::decide::{FunctionIntent, PatternIntent, decide_plan};
+
+    /// A capability exactly as `map_device` reports a Buttplug output.
+    fn reported(native: &str) -> Capability {
+        let (feature, max, steps) = match native {
+            "Constrict" => ("Pump", Some(3), 5),
+            POSITION_NATIVE => (POSITION_NATIVE, None, 15),
+            _ => (native, Some(20), 255),
+        };
+        Capability {
+            feature: feature.to_string(),
+            max,
+            native: native.to_string(),
+            steps: Some(steps),
+        }
+    }
+    fn enumerated(model: &str, natives: &[&str]) -> Device {
+        let mut capabilities: Vec<Capability> = natives.iter().map(|n| reported(n)).collect();
+        bind_capabilities(model, &mut capabilities);
+        Device {
+            id: "buttplug:7".to_string(),
+            provider: ProviderId::Buttplug,
+            name: model.to_string(),
+            kind: Some(model.to_string()),
+            battery: None,
+            capabilities,
+            capability_source: "reported",
+        }
+    }
+    fn fredorch() -> Device {
+        enumerated("Fredorch Device", &[POSITION_NATIVE])
+    }
+    fn snapshot(ceiling: u8) -> GateSnapshot {
+        GateSnapshot {
+            armed: true,
+            target_configured: true,
+            ceiling,
+        }
+    }
+    fn function(feature: &str, strength: i64) -> OutputIntent {
+        OutputIntent::Function(FunctionIntent {
+            feature: feature.into(),
+            strength,
+            time_sec: 30,
+            toy: Some("buttplug:7".into()),
+        })
+    }
+
+    // Validation (5).
+    #[test]
+    fn suction_bindings_publish_on_the_reported_constrict_output() {
+        for model in ["JoyHub RoseBUD", "JoyHub RoseLin"] {
+            let d = enumerated(model, &["Vibrate", "Rotate", "Constrict"]);
+            let caps = d.caps();
+            assert_eq!(caps.max_for("Suction"), Some(20));
+            // The raw Pump route is unchanged beside the named alias.
+            assert_eq!(caps.max_for("Pump"), Some(3));
+            assert_eq!(
+                d.to_json()["action_bindings"][0]["evidence"],
+                JOYHUB_EVIDENCE
+            );
+        }
+    }
+    #[test]
+    fn eropair_thrusting_binds_its_thruster_oscillate_output() {
+        let d = enumerated(
+            "Eropair Thrusting Vibrating Dildo",
+            &["Oscillate", "Vibrate"],
+        );
+        assert_eq!(d.caps().max_for("Thrusting"), Some(20));
+        assert_eq!(d.caps().max_for("Oscillate"), Some(20));
+        assert_eq!(
+            d.to_json()["action_bindings"][0]["evidence"],
+            HISMITH_MINI_EVIDENCE
+        );
+    }
+    #[test]
+    fn fredorch_position_axis_publishes_thrusting_only() {
+        let d = fredorch();
+        let caps = d.caps();
+        assert_eq!(caps.max_for("Thrusting"), Some(20));
+        assert_eq!(caps.max_for(POSITION_NATIVE), None);
+        let alias = d
+            .capabilities
+            .iter()
+            .find(|cap| cap.feature == "Thrusting")
+            .unwrap();
+        // The device-reported step count travels with the alias.
+        assert_eq!(alias.steps, Some(15));
+        assert_eq!(d.to_json()["action_bindings"][0]["native"], POSITION_NATIVE);
+    }
+    #[test]
+    fn fredorch_thrusting_full_scale_plans_unclamped() {
+        let plan = decide_plan(
+            &snapshot(20),
+            &function("Thrusting", 20),
+            &fredorch().caps(),
+        )
+        .unwrap();
+        assert!(!plan.clamped());
+        assert!(matches!(plan, AllowedOutput::Function { strength: 20, .. }));
+    }
+    #[test]
+    fn new_bindings_are_evidenced_and_unique_per_model_action() {
+        for (index, binding) in ACTION_BINDINGS.iter().enumerate() {
+            assert!(
+                binding
+                    .evidence
+                    .starts_with("https://docs.rs/crate/buttplug_server")
+            );
+            assert!(
+                ACTION_BINDINGS[index + 1..]
+                    .iter()
+                    .all(|other| (other.model, other.action) != (binding.model, binding.action))
+            );
+        }
+    }
+
+    // Adversarial (5).
+    #[test]
+    fn position_above_the_ceiling_is_clamped_by_the_gate() {
+        for (ceiling, asked, effective) in [(12, 99, 12), (20, 21, 20), (0, 5, 0)] {
+            let plan = decide_plan(
+                &snapshot(ceiling),
+                &function("Thrusting", asked),
+                &fredorch().caps(),
+            )
+            .unwrap();
+            assert!(plan.clamped());
+            let AllowedOutput::Function { strength, .. } = plan else {
+                panic!("function plan expected");
+            };
+            assert_eq!(strength, effective);
+        }
+    }
+    #[test]
+    fn raw_position_outputs_stay_refused_by_name() {
+        for name in [POSITION_NATIVE, "Position", "Temperature", "Led", "Spray"] {
+            let error =
+                decide_plan(&snapshot(20), &function(name, 1), &fredorch().caps()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::RequestInvalid);
+            assert!(error.message.contains(name));
+        }
+    }
+    #[test]
+    fn out_of_scope_position_devices_gain_nothing() {
+        // Male-class and scope-unverified position axes: no binding, so the
+        // Thrust family stays refused on them.
+        for model in [
+            "The Handy",
+            "Kiiroo Keon",
+            "Lovense Solace Pro",
+            "Kinky Makers OSSM",
+        ] {
+            let d = enumerated(model, &[POSITION_NATIVE]);
+            assert_eq!(d.capabilities.len(), 1);
+            let error =
+                decide_plan(&snapshot(20), &function("Thrusting", 1), &d.caps()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CapabilityUnsupported);
+        }
+    }
+    #[test]
+    fn unbound_named_actions_are_refused_never_remapped() {
+        // Suction without its binding (Rose Vore: undescribed constrict),
+        // and Thrusting on a model whose only binding is Suction.
+        let rose_vore = enumerated("JoyHub Rose Vore", &["Rotate", "Constrict"]);
+        let rosebud = enumerated("JoyHub RoseBUD", &["Vibrate", "Rotate", "Constrict"]);
+        for (d, action) in [
+            (&rose_vore, "Suction"),
+            (&rosebud, "Thrusting"),
+            (&rosebud, "Fingering"),
+        ] {
+            let error = decide_plan(&snapshot(20), &function(action, 1), &d.caps()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CapabilityUnsupported);
+            assert!(error.message.contains(action));
+        }
+    }
+    #[test]
+    fn stop_is_supreme_over_every_new_binding() {
+        let disarmed = GateSnapshot {
+            armed: false,
+            target_configured: false,
+            ceiling: 0,
+        };
+        let provider = FakeButtplug::new();
+        for d in [fredorch(), enumerated("JoyHub RoseBUD", &["Constrict"])] {
+            assert_eq!(
+                decide_plan(&disarmed, &OutputIntent::Stop, &d.caps()).unwrap(),
+                AllowedOutput::Stop
+            );
+            assert_eq!(
+                decide_plan(&disarmed, &function("Thrusting", 1), &d.caps())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::TargetUnconfigured
+            );
+            provider.execute(&AllowedOutput::Stop).unwrap();
+            assert!(provider.zero().unwrap());
+        }
+        assert_eq!(*provider.zero_log().lock().unwrap(), 2);
+    }
+
+    // Deterministic replay: one fixture session through the gate and the
+    // recording provider, three runs, byte-identical FNV-1a-64 stream hashes.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+    fn replay_once() -> u64 {
+        let provider = FakeButtplug::new();
+        let log = provider.executed_log();
+        let rosebud = enumerated("JoyHub RoseBUD", &["Vibrate", "Rotate", "Constrict"]);
+        let eropair = enumerated(
+            "Eropair Thrusting Vibrating Dildo",
+            &["Oscillate", "Vibrate"],
+        );
+        let pattern = OutputIntent::Pattern(PatternIntent {
+            features: "s".into(),
+            interval_ms: 250,
+            strengths: vec![4, 12, 20, 99],
+            time_sec: 10,
+            toy: Some("buttplug:7".into()),
+        });
+        let fredorch = fredorch();
+        let session: [(&Device, OutputIntent); 6] = [
+            (&rosebud, function("Suction", 15)),
+            (&rosebud, pattern),
+            (&eropair, function("Thrusting", 99)),
+            (&fredorch, function("Thrusting", 7)),
+            (&fredorch, function("Thrusting", 50)),
+            (&fredorch, OutputIntent::Stop),
+        ];
+        for (d, intent) in &session {
+            let plan = decide_plan(&snapshot(18), intent, &d.caps()).unwrap();
+            provider.execute(&plan).unwrap();
+        }
+        let stream = format!("{:?}", log.lock().unwrap());
+        fnv1a(stream.as_bytes())
+    }
+    #[test]
+    fn fixture_session_replays_byte_identically_three_times() {
+        let hashes = [replay_once(), replay_once(), replay_once()];
+        println!("for_her replay fnv1a64: {:016x} x3", hashes[0]);
+        assert!(hashes.iter().all(|hash| *hash == hashes[0]));
     }
 }

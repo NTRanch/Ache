@@ -38,7 +38,7 @@ use buttplug_server_hwmgr_serial::SerialPortCommunicationManagerBuilder;
 use crate::decide::{AllowedOutput, pattern_letter_action};
 use crate::error::{AcheError, ErrorCode, Result, err, truncate};
 use crate::provider::{
-    Capability, Device, DeviceProvider, ProviderId, ProviderProbe, action_binding,
+    Capability, Device, DeviceProvider, POSITION_NATIVE, ProviderId, ProviderProbe, action_binding,
     bind_capabilities,
 };
 
@@ -345,7 +345,11 @@ async fn map_device(device: &ButtplugClientDevice) -> Device {
         }
     }
     bind_capabilities(device.name(), &mut capabilities);
-    if capabilities.iter().any(|cap| cap.max.is_some()) {
+    // `All` drives the scalar outputs only; a stroke binding is not one.
+    if capabilities
+        .iter()
+        .any(|cap| cap.max.is_some() && cap.native != POSITION_NATIVE)
+    {
         capabilities.push(Capability {
             feature: "All".to_string(),
             max: Some(20),
@@ -411,6 +415,77 @@ fn native_value<'a>(model: &str, feature: &'a str, strength: i64, pattern: bool)
     )
 }
 
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: buttplug_server 12.0.2 src/device/protocol_impl/fredorch.rs,
+// SPEED_MATRIX row 15 (full 15-step travel) and calculate_speed
+// (BSD-3-Clause, Nonpolynomial Labs). The handler picks the first native
+// speed whose table time is below the requested duration, so asking for
+// `row[s - 1] + 1` ms selects native speed `s` exactly: unified Thrusting
+// 1..=20 is Fredorch speed 1..=20, with no ache-invented timing.
+const FREDORCH_FULL_TRAVEL_MS: [u32; 20] = [
+    8048, 7068, 4442, 3708, 2668, 1930, 1800, 1520, 878, 618, 428, 365, 260, 255, 250, 240, 230,
+    220, 210, 200,
+];
+
+/// One end-to-end traverse of a position axis: the target as a fraction
+/// of the device-reported step range (0.0 or 1.0, so the device's own
+/// step count is the ceiling) and how long the traverse is given.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HalfStroke {
+    percent: f64,
+    duration_ms: u32,
+}
+
+/// The stroke program for a position-bound Thrusting plan. Pure and
+/// bounded: whole traverses only, never past `time_sec`. A model with no
+/// evidenced timing table is refused, never given another model's.
+fn stroke_program(model: &str, strength: i64, time_sec: i64) -> Result<Vec<HalfStroke>> {
+    if model != "Fredorch Device" {
+        return err(
+            ErrorCode::CapabilityUnsupported,
+            format!("no evidenced stroke timing exists for {model:?}"),
+        );
+    }
+    if strength == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(index) = usize::try_from(strength)
+        .ok()
+        .filter(|speed| (1..=FREDORCH_FULL_TRAVEL_MS.len()).contains(speed))
+        .map(|speed| speed - 1)
+    else {
+        return err(
+            ErrorCode::RequestInvalid,
+            format!("thrusting strength {strength} is outside the device's 1..=20 speeds"),
+        );
+    };
+    let duration_ms = FREDORCH_FULL_TRAVEL_MS[index] + 1;
+    let total_ms = u64::try_from(time_sec).unwrap_or(0).saturating_mul(1000);
+    let count = total_ms / u64::from(duration_ms);
+    if count == 0 {
+        return err(
+            ErrorCode::RequestInvalid,
+            format!(
+                "time_sec {time_sec} is shorter than one stroke ({duration_ms} ms) at speed {strength}"
+            ),
+        );
+    }
+    // Bounded by the gate's time_sec maximum: at most 3_600_000 / 201.
+    let program: Vec<HalfStroke> = (0..count)
+        .map(|half| HalfStroke {
+            percent: if half % 2 == 0 { 1.0 } else { 0.0 },
+            duration_ms,
+        })
+        .collect();
+    debug_assert!(program.len() as u64 * u64::from(duration_ms) <= total_ms);
+    Ok(program)
+}
+
+/// Whether a unified feature on this model is a stroke-generating binding.
+fn is_stroke_binding(model: &str, feature: &str) -> bool {
+    action_binding(model, feature).is_some_and(|binding| binding.native == POSITION_NATIVE)
+}
+
 async fn run_feature(
     device: &ButtplugClientDevice,
     feature: &str,
@@ -451,6 +526,44 @@ async fn run_feature(
     Ok(())
 }
 
+/// Run a stroke program: the first traverse is sent here so a transport
+/// failure is a typed error; the rest step in a task that any zero or
+/// superseding command aborts. Buttplug's stop sends nothing to a
+/// position axis, so a stop ends the program and the traverse already in
+/// flight completes (at most one table time, 8048 ms at speed 1).
+async fn run_stroke(
+    device: &ButtplugClientDevice,
+    tasks: &mut TaskSet,
+    strength: i64,
+    time_sec: i64,
+) -> Result<()> {
+    let program = stroke_program(device.name(), strength, time_sec)?;
+    let traverse = |half: &HalfStroke| {
+        ClientDeviceOutputCommand::HwPositionWithDuration(
+            ClientDeviceCommandValue::Percent(half.percent),
+            half.duration_ms,
+        )
+    };
+    let Some(first) = program.first() else {
+        return Ok(());
+    };
+    device
+        .run_output(&traverse(first))
+        .await
+        .map_err(|error| transport_error("run output", &error))?;
+    let stroking = device.clone();
+    let handle = tokio::spawn(async move {
+        for (step, half) in program.iter().enumerate() {
+            if step > 0 && stroking.run_output(&traverse(half)).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(u64::from(half.duration_ms))).await;
+        }
+    });
+    tasks.add(device.index(), handle.abort_handle());
+    Ok(())
+}
+
 async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOutput) -> Result<()> {
     match plan {
         AllowedOutput::Stop => {
@@ -467,6 +580,9 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
         } => {
             let device = find_device(client, toy)?;
             tasks.abort_device(device.index());
+            if is_stroke_binding(device.name(), feature) {
+                return run_stroke(&device, tasks, *strength, *time_sec).await;
+            }
             run_feature(&device, feature, *strength, false).await?;
             // Honour the plan's bounded duration: Buttplug commands
             // carry none, so the zero is scheduled here and aborted
@@ -516,6 +632,17 @@ async fn execute(client: &ButtplugClient, tasks: &mut TaskSet, plan: &AllowedOut
                 return err(
                     ErrorCode::CapabilityUnsupported,
                     "the device offers no function a pattern can drive",
+                );
+            }
+            if let Some(feature) = driven
+                .iter()
+                .find(|feature| is_stroke_binding(device.name(), feature))
+            {
+                return err(
+                    ErrorCode::CapabilityUnsupported,
+                    format!(
+                        "{feature} on this device is a stroke program; patterns cannot drive it"
+                    ),
                 );
             }
             let strengths = strengths.clone();
@@ -638,5 +765,128 @@ mod step2_tests {
             native_value("unknown", "Fingering", 20, false).0,
             "Fingering"
         );
+    }
+}
+
+// origin_lane: ntranch; content_label: nsfw
+// Evidence: buttplug_server 12.0.2 fredorch.rs SPEED_MATRIX / calculate_speed.
+#[cfg(test)]
+mod stroke_tests {
+    use super::*;
+
+    /// fredorch.rs calculate_speed for full travel, transcribed: the first
+    /// speed whose table time is below the duration, else 20.
+    fn buttplug_speed_for(duration_ms: u32) -> usize {
+        (1..20)
+            .find(|speed| FREDORCH_FULL_TRAVEL_MS[speed - 1] < duration_ms)
+            .unwrap_or(20)
+    }
+
+    // Validation (5).
+    #[test]
+    fn every_thrusting_strength_selects_the_same_native_speed() {
+        for strength in 1..=20_i64 {
+            let program = stroke_program("Fredorch Device", strength, 3600).unwrap();
+            let speed = buttplug_speed_for(program[0].duration_ms);
+            assert_eq!(speed as i64, strength);
+        }
+    }
+    #[test]
+    fn the_transcribed_table_is_strictly_decreasing() {
+        assert!(
+            FREDORCH_FULL_TRAVEL_MS
+                .windows(2)
+                .all(|pair| pair[0] > pair[1])
+        );
+    }
+    #[test]
+    fn programs_alternate_full_range_and_fit_the_duration() {
+        for (strength, time_sec) in [(1, 9), (7, 30), (20, 1), (20, 3600)] {
+            let program = stroke_program("Fredorch Device", strength, time_sec).unwrap();
+            let total: u64 = program.iter().map(|half| u64::from(half.duration_ms)).sum();
+            assert!(total <= u64::try_from(time_sec).unwrap() * 1000);
+            for (step, half) in program.iter().enumerate() {
+                assert_eq!(half.percent, if step % 2 == 0 { 1.0 } else { 0.0 });
+            }
+        }
+        // 3600 s at the fastest speed is the largest program: bounded.
+        assert_eq!(
+            stroke_program("Fredorch Device", 20, 3600).unwrap().len(),
+            17_910
+        );
+    }
+    #[test]
+    fn strength_zero_is_an_empty_program() {
+        assert!(stroke_program("Fredorch Device", 0, 30).unwrap().is_empty());
+    }
+    #[test]
+    fn dispatch_translation_names_the_position_output() {
+        let (native, value) = native_value("Fredorch Device", "Thrusting", 20, false);
+        assert_eq!(native, POSITION_NATIVE);
+        assert_eq!(value, 1.0);
+        assert!(is_stroke_binding("Fredorch Device", "Thrusting"));
+        assert!(!is_stroke_binding(
+            "Eropair Thrusting Vibrating Dildo",
+            "Thrusting"
+        ));
+    }
+
+    // Adversarial (5).
+    #[test]
+    fn no_other_model_borrows_the_fredorch_timing() {
+        for model in [
+            "The Handy",
+            "Kinky Makers OSSM",
+            "Fredorch Rotary Device",
+            "",
+        ] {
+            let error = stroke_program(model, 10, 30).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CapabilityUnsupported);
+        }
+    }
+    #[test]
+    fn unclamped_strengths_are_refused_never_extrapolated() {
+        for strength in [-1, 21, 99, i64::MAX, i64::MIN] {
+            let error = stroke_program("Fredorch Device", strength, 30).unwrap_err();
+            assert_eq!(error.code, ErrorCode::RequestInvalid);
+        }
+    }
+    #[test]
+    fn a_duration_shorter_than_one_stroke_is_refused() {
+        // Speed 1 needs 8049 ms per traverse.
+        let error = stroke_program("Fredorch Device", 1, 8).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RequestInvalid);
+        assert!(stroke_program("Fredorch Device", 1, 9).is_ok());
+        for time_sec in [0, -5] {
+            assert!(stroke_program("Fredorch Device", 20, time_sec).is_err());
+        }
+    }
+    #[test]
+    fn the_raw_position_output_has_no_scalar_route() {
+        // run_feature would refuse it by name; the scalar match never has it.
+        let (native, _) = native_value("unknown", POSITION_NATIVE, 1, false);
+        assert_eq!(native, POSITION_NATIVE);
+        assert!(!matches!(
+            native,
+            "Vibrate" | "Rotate" | "Oscillate" | "Pump" | "Constrict" | "All"
+        ));
+    }
+    #[test]
+    fn stroke_streams_replay_byte_identically_three_times() {
+        let stream = || {
+            let mut bytes = Vec::new();
+            for (strength, time_sec) in [(7, 30), (18, 30), (1, 60), (0, 5)] {
+                for half in stroke_program("Fredorch Device", strength, time_sec).unwrap() {
+                    bytes.extend_from_slice(&half.percent.to_le_bytes());
+                    bytes.extend_from_slice(&half.duration_ms.to_le_bytes());
+                }
+            }
+            bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        let hashes = [stream(), stream(), stream()];
+        println!("stroke replay fnv1a64: {:016x} x3", hashes[0]);
+        assert!(hashes.iter().all(|hash| *hash == hashes[0]));
     }
 }
