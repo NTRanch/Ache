@@ -1,0 +1,308 @@
+{
+ "origin_lane": "ntranch",
+ "content_label": "nsfw",
+ "runs": [
+  {
+   "run": 1,
+   "steps": {
+    "fmt": {
+     "exit": 0,
+     "seconds": 0.3
+    },
+    "clippy": {
+     "exit": 0,
+     "seconds": 0.3
+    },
+    "test": {
+     "exit": 0,
+     "seconds": 15.3,
+     "suites": [
+      {
+       "result": "ok",
+       "passed": 261,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 2,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 9,
+       "failed": 0
+      }
+     ],
+     "passed": 272,
+     "failed": 0,
+     "replay": [
+      [
+       "automation",
+       "39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0"
+      ],
+      [
+       "basic",
+       "1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181"
+      ],
+      [
+       "funscript",
+       "aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f"
+      ],
+      [
+       "pack",
+       "6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331"
+      ],
+      [
+       "scripted",
+       "25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e"
+      ],
+      [
+       "seed:alma-draining-loop",
+       "8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c"
+      ],
+      [
+       "seed:alma-nipple-cycle",
+       "e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172"
+      ],
+      [
+       "seed:denial-arousal-meter",
+       "a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941"
+      ],
+      [
+       "seed:edge-pressure-shape",
+       "1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9"
+      ],
+      [
+       "seed:edge-stillness",
+       "f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1"
+      ],
+      [
+       "seed:forher-pair",
+       "094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b"
+      ],
+      [
+       "seed:hr-trainer",
+       "e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80"
+      ],
+      [
+       "seed:hyp-clicker",
+       "3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf"
+      ],
+      [
+       "seed:hyp-keyword-ladder",
+       "a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7"
+      ]
+     ],
+     "program": [
+      "PROGRAM a6 stop=ache_program_stop latency_us=139 frames=7",
+      "PROGRAM a6 stop=lovense_stop latency_us=95 frames=7",
+      "PROGRAM live==replay hash=a5357f5782a6f5c1c8ae89683465ddc37835834059583c9996214a1e427942fa commands=32"
+     ]
+    }
+   },
+   "green": true
+  },
+  {
+   "run": 2,
+   "steps": {
+    "fmt": {
+     "exit": 0,
+     "seconds": 0.2
+    },
+    "clippy": {
+     "exit": 0,
+     "seconds": 0.2
+    },
+    "test": {
+     "exit": 0,
+     "seconds": 6.1,
+     "suites": [
+      {
+       "result": "ok",
+       "passed": 261,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 2,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 9,
+       "failed": 0
+      }
+     ],
+     "passed": 272,
+     "failed": 0,
+     "replay": [
+      [
+       "automation",
+       "39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0"
+      ],
+      [
+       "basic",
+       "1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181"
+      ],
+      [
+       "funscript",
+       "aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f"
+      ],
+      [
+       "pack",
+       "6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331"
+      ],
+      [
+       "scripted",
+       "25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e"
+      ],
+      [
+       "seed:alma-draining-loop",
+       "8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c"
+      ],
+      [
+       "seed:alma-nipple-cycle",
+       "e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172"
+      ],
+      [
+       "seed:denial-arousal-meter",
+       "a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941"
+      ],
+      [
+       "seed:edge-pressure-shape",
+       "1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9"
+      ],
+      [
+       "seed:edge-stillness",
+       "f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1"
+      ],
+      [
+       "seed:forher-pair",
+       "094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b"
+      ],
+      [
+       "seed:hr-trainer",
+       "e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80"
+      ],
+      [
+       "seed:hyp-clicker",
+       "3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf"
+      ],
+      [
+       "seed:hyp-keyword-ladder",
+       "a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7"
+      ]
+     ],
+     "program": [
+      "PROGRAM a6 stop=ache_program_stop latency_us=139 frames=7",
+      "PROGRAM a6 stop=lovense_stop latency_us=98 frames=7",
+      "PROGRAM live==replay hash=a5357f5782a6f5c1c8ae89683465ddc37835834059583c9996214a1e427942fa commands=32"
+     ]
+    }
+   },
+   "green": true
+  },
+  {
+   "run": 3,
+   "steps": {
+    "fmt": {
+     "exit": 0,
+     "seconds": 0.2
+    },
+    "clippy": {
+     "exit": 0,
+     "seconds": 0.3
+    },
+    "test": {
+     "exit": 0,
+     "seconds": 6.1,
+     "suites": [
+      {
+       "result": "ok",
+       "passed": 261,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 2,
+       "failed": 0
+      },
+      {
+       "result": "ok",
+       "passed": 9,
+       "failed": 0
+      }
+     ],
+     "passed": 272,
+     "failed": 0,
+     "replay": [
+      [
+       "automation",
+       "39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0"
+      ],
+      [
+       "basic",
+       "1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181"
+      ],
+      [
+       "funscript",
+       "aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f"
+      ],
+      [
+       "pack",
+       "6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331"
+      ],
+      [
+       "scripted",
+       "25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e"
+      ],
+      [
+       "seed:alma-draining-loop",
+       "8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c"
+      ],
+      [
+       "seed:alma-nipple-cycle",
+       "e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172"
+      ],
+      [
+       "seed:denial-arousal-meter",
+       "a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941"
+      ],
+      [
+       "seed:edge-pressure-shape",
+       "1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9"
+      ],
+      [
+       "seed:edge-stillness",
+       "f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1"
+      ],
+      [
+       "seed:forher-pair",
+       "094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b"
+      ],
+      [
+       "seed:hr-trainer",
+       "e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80"
+      ],
+      [
+       "seed:hyp-clicker",
+       "3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf"
+      ],
+      [
+       "seed:hyp-keyword-ladder",
+       "a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7"
+      ]
+     ],
+     "program": [
+      "PROGRAM a6 stop=ache_program_stop latency_us=141 frames=7",
+      "PROGRAM a6 stop=lovense_stop latency_us=113 frames=7",
+      "PROGRAM live==replay hash=a5357f5782a6f5c1c8ae89683465ddc37835834059583c9996214a1e427942fa commands=32"
+     ]
+    }
+   },
+   "green": true
+  }
+ ],
+ "replay_hashes_identical_across_runs": true,
+ "landing_bar_met": true
+}
