@@ -13,6 +13,11 @@
 //!   visible figure through the toon layer's parameter surface);
 //! - the Lexicon ([`lexicon`]): the sourced guide book as data.
 //!
+//! An optional live figure (env-flagged, off by default) renders
+//! Lana from her rig through an out-of-process renderer
+//! ([`live`]); it is a display path only and changes nothing
+//! below.
+//!
 //! There is NO device-control wiring in this build: no provider is
 //! constructed and no device path exists. The trial is a simulation
 //! over virtual devices only. Any future real-device path reaches
@@ -29,6 +34,7 @@ mod drag;
 mod features;
 mod guide;
 mod lexicon;
+mod live;
 mod reaction;
 mod trial;
 
@@ -58,6 +64,7 @@ struct AppState {
     trial: Trial,
     clips: ClipRegistry,
     drag: drag::Drag,
+    live: Option<live::LiveRenderer>,
 }
 
 impl AppState {
@@ -291,6 +298,26 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
     window.set_zone_nip(pct(drives[Zone::Nipples as usize]));
     window.set_total_pleasure((state.trial.total_pleasure() / 10).clamp(0, 100));
     window.set_trace_image(trace_image(state));
+    // The live figure, when spawned, is driven by the same
+    // reaction frame the strip reads — clip key and per-mille
+    // expression, unchanged. The rig breathes in-clip, so the
+    // strip's GUI-side breathing bob is zeroed while live is up:
+    // two breathing systems would double the motion.
+    if let Some(renderer) = &state.live {
+        renderer.send_state(&frame.clip_key, &frame.expr);
+        if renderer.is_alive() {
+            window.set_lana_x(0.0);
+            window.set_lana_y(0.0);
+            window.set_lana_clip(
+                format!(
+                    "{} · live rig: {} frames streamed",
+                    window.get_lana_clip(),
+                    renderer.frames_received()
+                )
+                .into(),
+            );
+        }
+    }
 }
 
 /// The live trace: one pleasure polyline per toy plus her arousal,
@@ -499,6 +526,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("lexicon coverage gaps: {}", gaps.join("; ")).into());
         }
     }
+    let live = live::LiveRenderer::from_env();
     let state = Rc::new(RefCell::new(AppState {
         devices: devices.clone(),
         features,
@@ -509,6 +537,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         trial: Trial::new(),
         clips: ClipRegistry::new(),
         drag: drag::Drag::default(),
+        live,
     }));
 
     let window = MainWindow::new()?;
@@ -596,6 +625,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let state = state.clone();
         let weak = window.as_weak();
         window.on_trial_clear(move || {
+            // STOP's live half: the stop state goes out (with its
+            // sequence floor) before the cleared trial re-syncs, so
+            // no pre-stop frame can be displayed after this point.
+            if let Some(renderer) = &state.borrow().live {
+                renderer.send_stop();
+            }
             state.borrow_mut().trial.clear_toys();
             if let Some(window) = weak.upgrade() {
                 window.set_trial_note("".into());
@@ -758,11 +793,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::time::Duration::from_millis(30),
             move || {
                 let mut state = state.borrow_mut();
-                if !state.drag.active() {
-                    last_mouse.set(None);
-                    return;
-                }
                 if let Some(window) = weak.upgrade() {
+                    // The live-frame pump shares this 30 ms timer:
+                    // the renderer streams at its own pace and the
+                    // stage shows the newest frame; a dead renderer
+                    // drops lana-live-on and the strip returns.
+                    if let Some(renderer) = &state.live {
+                        if let Some(image) = renderer.poll_image() {
+                            window.set_lana_live_image(image);
+                        }
+                        window.set_lana_live_on(renderer.is_alive());
+                    }
+                    if !state.drag.active() {
+                        last_mouse.set(None);
+                        return;
+                    }
                     // A release the TouchArea never delivered
                     // (pointer left the window mid-drag) still
                     // lets her go.

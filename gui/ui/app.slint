@@ -553,6 +553,8 @@ export component MainWindow inherits Window {
     in property <string> lana-events: "";
     in property <string> lana-params: "";
     in property <string> lana-clip: "";
+    in property <image> lana-live-image;
+    in property <bool> lana-live-on: false;
     // --- Lana, picked up (drag state owned by drag.rs) ---
     in property <length> lana-drag-x: 0px;
     in property <length> lana-drag-y: 0px;
@@ -669,6 +671,7 @@ export component MainWindow inherits Window {
                     opacity: 0.25 + root.lana-arousal * 0.0075;
                 }
                 Image {
+                    visible: !root.lana-live-on;
                     source: root.lana-strip-idx == 0 ? Assets.lana-idle
                         : root.lana-strip-idx == 1 ? Assets.lana-guiding
                         : root.lana-strip-idx == 2 ? Assets.lana-waiting
@@ -680,6 +683,16 @@ export component MainWindow inherits Window {
                     source-clip-height: 288;
                     width: 240px;
                     height: 480px;
+                }
+                // Her live figure: the rig, rendered per-frame by
+                // the out-of-process renderer (scope Option C).
+                // Same box as the strip; the zone glows below draw
+                // over whichever figure is up.
+                Image {
+                    source: root.lana-live-image;
+                    width: 240px;
+                    height: 480px;
+                    visible: root.lana-live-on;
                 }
                 // The zones being played, glowing on her body.
                 Rectangle {
