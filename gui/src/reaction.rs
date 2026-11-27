@@ -242,6 +242,9 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
     let arousal = trial.arousal;
     let t = tier as u32;
     // Expression targets per band; tier scales the mobile params.
+    // pupil_shape is 0 in every band by identity canon: heart pupils
+    // belong to Prima/Alma, never Lana; her frozen reaction clips are
+    // identically 0 (tranche-1 calibration adjudication, 2026-11-27).
     let expr = match band {
         Band::Composed => Expr13 {
             eyelid_aperture: 900,
@@ -261,7 +264,7 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
         Band::LightPleasure => Expr13 {
             eyelid_aperture: 760,
             pupil_dilate: 420,
-            pupil_shape: 120,
+            pupil_shape: 0,
             eye_gloss: 480,
             tear_sheen: 0,
             brow_raise: 480,
@@ -276,7 +279,7 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
         Band::Building => Expr13 {
             eyelid_aperture: 680,
             pupil_dilate: 550,
-            pupil_shape: 300,
+            pupil_shape: 0,
             eye_gloss: 560,
             tear_sheen: 60,
             brow_raise: 560,
@@ -291,7 +294,7 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
         Band::NearOrgasm => Expr13 {
             eyelid_aperture: 520,
             pupil_dilate: 760,
-            pupil_shape: 620,
+            pupil_shape: 0,
             eye_gloss: 700,
             tear_sheen: 240,
             brow_raise: 680,
@@ -306,7 +309,7 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
         Band::Orgasm | Band::SquirtEvent => Expr13 {
             eyelid_aperture: 260,
             pupil_dilate: 920,
-            pupil_shape: 900,
+            pupil_shape: 0,
             eye_gloss: 820,
             tear_sheen: 420,
             brow_raise: 760,
@@ -336,7 +339,7 @@ pub fn reaction_frame(trial: &Trial) -> ReactionFrame {
         Band::Afterglow => Expr13 {
             eyelid_aperture: 480,
             pupil_dilate: 480,
-            pupil_shape: 260,
+            pupil_shape: 0,
             eye_gloss: 640,
             tear_sheen: 120,
             brow_raise: 300,
