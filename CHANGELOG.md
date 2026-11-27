@@ -3,7 +3,30 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
-## Unreleased — supplemental device configuration (branch pax/ache-iost-config-20261127)
+## 1.5.0 — 2026-11-27 — GUI catalogue browser + IoST supplemental device config
+
+A minor release: substantial new capability with no breaking change
+to the MCP tool surface (still 16 tools, same schemas and refusal
+codes). It stacks three lineages on the 1.4.0 main (07a7e87):
+
+- The 1.4.0 landings (KoiSync + XToys; see the 1.4.0 section below;
+  record: ache-landings-20261125/LANDING.md, gates 322/0 at landing).
+- GUI catalogue browser (gui/ crate, ache-gui 0.1.0): a Slint 1.19.1
+  desktop shell with a searchable catalogue of all 471 IoST devices
+  and an inert control-preview pane (master OFF, every control
+  disabled, no provider constructed). Dark theme by default with
+  purple/pink accents (Owner ruling 2026-11-27). Record:
+  ache-gui-20261126/RECORD.md.
+- Supplemental device configuration (below; branch
+  pax/ache-iost-config-20261127). Record:
+  ache-iost-impl-20261127/RECORD.md.
+
+Safety invariants unchanged and re-verified in this tree: the pure
+decide() gate, master off by default, ceiling clamp, synchronous
+stop, no resume on reconnect, 5 s heartbeat watchdog.
+
+### Supplemental device configuration
+
 
 - The Buttplug provider now builds its device configuration through
   the crate's config loader (`load_protocol_configs`), layering

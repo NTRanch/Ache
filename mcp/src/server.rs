@@ -2315,7 +2315,7 @@ mod tests {
         assert_eq!(status["session_health"], "ok");
         assert_eq!(status["intensity_ceiling"], 20);
         assert_eq!(status["watchdog_secs"], 5);
-        assert_eq!(status["server"]["version"], "1.4.0");
+        assert_eq!(status["server"]["version"], "1.5.0");
         assert!(!status.to_string().contains("connected"));
     }
 
