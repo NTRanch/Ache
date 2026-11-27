@@ -3,16 +3,56 @@
 // Safety shape, by construction: the master switch exists only as a
 // rendered OFF switch in this phase. There is no property, callback, or
 // code path in this file that can enable a control or reach a device.
+//
+// Theme (Owner ruling, 2026-11-27 01:07 PT): dark mode by default, with
+// a contrasting purple/pink accent pair to balance. Dark is forced in
+// code — both windows assign `Palette.color-scheme = ColorScheme.dark`
+// at init, which replaces the platform-preference binding for the whole
+// process; there is no light default and no theme toggle in this build.
+// All app-owned colours come from the `Theme` global below; the std
+// widgets (search field, tabs, switch, slider, buttons) render their
+// dark variants from the forced Palette scheme. Body text stays on the
+// neutral dark palette (foreground / muted / faint); purple and pink
+// are accents. Every text-bearing pair measures WCAG AA (>= 4.5:1) —
+// the ratios are recorded in the phase record (RECORD.md).
 
 import {
     AboutSlint,
     Button,
     LineEdit,
     ListView,
+    Palette,
     Slider,
     Switch,
     TabWidget,
 } from "std-widgets.slint";
+
+/// The app theme: a plum-dark ground, neutral text ramp, primary
+/// purple accent, secondary pink highlight. Chip colours sit on the
+/// violet → fuchsia → pink → rose arc, one per support bucket; the
+/// printed bucket label carries the distinction, the hue reinforces
+/// it. Link-state colours keep their semantic coding (green / red /
+/// amber), brightened for the dark ground.
+export global Theme {
+    out property <color> background: #1e1930;
+    out property <color> foreground: #f5f2fa;
+    out property <color> muted: #b9aec9;
+    out property <color> faint: #9a8bb0;
+    out property <color> border: #453761;
+    out property <color> accent: #8b5cf6;
+    out property <color> accent-bright: #c4b5fd;
+    out property <color> accent-deep: #4c1d95;
+    out property <color> pink: #ec4899;
+    out property <color> pink-bright: #f9a8d4;
+    out property <color> link: #f472b6;
+    out property <color> chip-a: #7c3aed;
+    out property <color> chip-a-g: #a21caf;
+    out property <color> chip-b: #be185d;
+    out property <color> chip-c: #9f1239;
+    out property <color> state-en: #4ade80;
+    out property <color> state-dead: #f87171;
+    out property <color> warn: #fbbf24;
+}
 
 /// One catalogue row, mirrored by `DeviceRow` construction in main.rs.
 /// `url` is empty exactly when `has-url` is false (IoST lists no link);
@@ -43,10 +83,10 @@ component CatalogueRow inherits Rectangle {
             height: 24px;
             y: 4px;
             border-radius: 4px;
-            background: data.bucket == "A" ? #166534
-                : data.bucket == "A-g" ? #3f6212
-                : data.bucket == "B" ? #a16207
-                : #991b1b;
+            background: data.bucket == "A" ? Theme.chip-a
+                : data.bucket == "A-g" ? Theme.chip-a-g
+                : data.bucket == "B" ? Theme.chip-b
+                : Theme.chip-c;
             Text {
                 text: data.bucket;
                 color: white;
@@ -63,28 +103,29 @@ component CatalogueRow inherits Rectangle {
                 spacing: 8px;
                 Text {
                     text: data.brand + " — " + data.device;
+                    color: Theme.foreground;
                     font-weight: 700;
                     overflow: elide;
                 }
                 Text {
                     text: data.device-type;
-                    color: #666666;
+                    color: Theme.muted;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
                 if data.untested: Text {
                     text: "untested upstream";
-                    color: #a16207;
+                    color: Theme.warn;
                     font-size: 11px;
                 }
                 Text {
                     text: data.link-state;
                     font-size: 11px;
                     font-weight: 700;
-                    color: data.link-state == "EN" ? #166534
-                        : data.link-state == "DEAD" ? #991b1b
-                        : data.link-state == "NON-EN" ? #a16207
-                        : #666666;
+                    color: data.link-state == "EN" ? Theme.state-en
+                        : data.link-state == "DEAD" ? Theme.state-dead
+                        : data.link-state == "NON-EN" ? Theme.warn
+                        : Theme.faint;
                 }
             }
             if data.has-url: TouchArea {
@@ -97,7 +138,7 @@ component CatalogueRow inherits Rectangle {
                     x: 0px;
                     width: parent.width;
                     text: data.url;
-                    color: #1d4ed8;
+                    color: Theme.link;
                     font-size: 12px;
                     horizontal-alignment: left;
                     overflow: elide;
@@ -105,7 +146,7 @@ component CatalogueRow inherits Rectangle {
             }
             if !data.has-url: Text {
                 text: "no link listed in IoST";
-                color: #888888;
+                color: Theme.faint;
                 font-size: 12px;
             }
         }
@@ -114,7 +155,7 @@ component CatalogueRow inherits Rectangle {
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: #dddddd;
+        background: Theme.border;
     }
 }
 
@@ -122,6 +163,14 @@ export component MainWindow inherits Window {
     title: "ache — device catalogue";
     width: 1120px;
     height: 780px;
+    background: Theme.background;
+
+    // Dark by default (Owner ruling, 2026-11-27): force the dark
+    // scheme at startup, independent of the OS preference. See the
+    // theme note at the top of this file.
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
 
     in property <[DeviceRow]> devices;
     in property <string> summary;
@@ -135,6 +184,7 @@ export component MainWindow inherits Window {
             spacing: 10px;
             Text {
                 text: "ache device catalogue";
+                color: Theme.accent-bright;
                 font-size: 20px;
                 font-weight: 700;
                 vertical-alignment: center;
@@ -159,21 +209,35 @@ export component MainWindow inherits Window {
             padding-bottom: 6px;
             Text {
                 text: root.summary;
-                color: #444444;
+                color: Theme.muted;
                 font-size: 12px;
             }
         }
 
         Rectangle {
             height: 30px;
-            background: #7f1d1d;
-            Text {
-                text: "MASTER OFF — device control is not wired in this build; every control is inert.";
-                color: white;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            background: Theme.accent-deep;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text {
+                    text: "MASTER OFF — ";
+                    color: Theme.pink-bright;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "device control is not wired in this build; every control is inert.";
+                    color: white;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
             }
+        }
+
+        Rectangle {
+            height: 2px;
+            background: Theme.pink;
         }
 
         TabWidget {
@@ -197,6 +261,7 @@ export component MainWindow inherits Window {
                     alignment: start;
                     Text {
                         text: "Control preview — rendering proof only. No device connection exists in this build, and none can be made from this pane.";
+                        color: Theme.foreground;
                         wrap: word-wrap;
                     }
                     HorizontalLayout {
@@ -204,6 +269,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "Master";
+                            color: Theme.foreground;
                             vertical-alignment: center;
                         }
                         Switch {
@@ -212,7 +278,7 @@ export component MainWindow inherits Window {
                         }
                         Text {
                             text: "OFF";
-                            color: #991b1b;
+                            color: Theme.link;
                             font-weight: 700;
                             vertical-alignment: center;
                         }
@@ -222,6 +288,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "Intensity";
+                            color: Theme.foreground;
                             vertical-alignment: center;
                         }
                         Slider {
@@ -247,7 +314,7 @@ export component MainWindow inherits Window {
                     Text {
                         text: "While the master switch is off, every control stays inert — including STOP, which is on screen from the first frame. Device wiring lands in a later phase and reaches devices only through ache's decide() gate and tool surface.";
                         wrap: word-wrap;
-                        color: #555555;
+                        color: Theme.muted;
                     }
                 }
             }
@@ -262,21 +329,30 @@ export component AboutDialog inherits Window {
     title: "About ache";
     width: 440px;
     height: 430px;
+    background: Theme.background;
+
+    // Same forced dark scheme as the main window (see MainWindow).
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
 
     VerticalLayout {
         padding: 16px;
         spacing: 10px;
         Text {
             text: "ache";
+            color: Theme.foreground;
             font-size: 22px;
             font-weight: 700;
         }
         Text {
             text: "Unified haptics MCP — device catalogue browser (GUI phase 1).";
+            color: Theme.muted;
             wrap: word-wrap;
         }
         Text {
             text: "ache's own code is licensed under the Apache License 2.0. This application is built with the Slint toolkit under the Slint Royalty-free Desktop, Mobile, and Web Applications License; the required attribution follows.";
+            color: Theme.muted;
             wrap: word-wrap;
         }
         AboutSlint { }
