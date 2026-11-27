@@ -153,39 +153,49 @@ fn sync_detail(window: &MainWindow, state: &AppState) {
 /// tick — per-tick values are scalar properties and the trace image.
 fn sync_trial_model(window: &MainWindow, state: &AppState) {
     let telemetry = state.trial.telemetry();
+    let mut y_offset = 0i32;
     let rows: Vec<TrialToyRow> = state
         .trial
         .toys
         .iter()
         .enumerate()
-        .map(|(index, toy)| TrialToyRow {
-            toy_index: index as i32,
-            name: format!("{} — {} ({})", toy.brand, toy.name, toy.family).into(),
-            family: toy.family.clone().into(),
-            pleasure: telemetry[index].pleasure,
-            force: telemetry[index].force as i32,
-            channels: ModelRc::from(Rc::new(VecModel::from(
-                toy.channels
-                    .iter()
-                    .map(|channel| ChannelRow {
-                        label: format!(
-                            "{}{}",
-                            channel.kind.token(),
-                            if channel.max == 0 {
-                                String::new()
-                            } else {
-                                format!(" · 0–{}", channel.max)
-                            }
-                        )
-                        .into(),
-                        level: channel.level as i32,
-                        max: channel.max as i32,
-                    })
-                    .collect::<Vec<_>>(),
-            ))),
-            spark: Image::default(),
+        .map(|(index, toy)| {
+            let card_height = 96 + 30 * toy.channels.len() as i32;
+            let this_y = y_offset;
+            y_offset += card_height + 8;
+            TrialToyRow {
+                toy_index: index as i32,
+                name: format!("{} — {} ({})", toy.brand, toy.name, toy.family).into(),
+                family: toy.family.clone().into(),
+                pleasure: (telemetry[index].pleasure / 10).min(100),
+                force: ((telemetry[index].force / 10) as i32).min(100),
+                channel_count: toy.channels.len() as i32,
+                y_offset: this_y,
+                card_height,
+                channels: ModelRc::from(Rc::new(VecModel::from(
+                    toy.channels
+                        .iter()
+                        .map(|channel| ChannelRow {
+                            label: format!(
+                                "{}{}",
+                                channel.kind.token(),
+                                if channel.max == 0 {
+                                    String::new()
+                                } else {
+                                    format!(" · 0–{}", channel.max)
+                                }
+                            )
+                            .into(),
+                            level: channel.level as i32,
+                            max: channel.max as i32,
+                        })
+                        .collect::<Vec<_>>(),
+                ))),
+                spark: Image::default(),
+            }
         })
         .collect();
+    window.set_rig_height(y_offset);
     window.set_trial_toys(ModelRc::from(Rc::new(VecModel::from(rows))));
     window.set_trial_count(
         format!(
@@ -210,7 +220,7 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
         Band::Overstimulation => 4,
     };
     window.set_lana_strip_idx(strip);
-    window.set_lana_frame(((state.trial.tick_count / 2) % 6) as i32);
+    window.set_lana_frame((state.trial.tick_count % 12) as i32);
     let body = frame.body;
     let x = body.tremble_wave as f32 * body.tremble_amp as f32 / 1000.0 * 0.004
         - body.recoil as f32 * 0.008;
@@ -221,7 +231,7 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
     window.set_lana_y(y);
     window.set_lana_band(frame.band.label().into());
     window.set_lana_stage(state.trial.stage().label().into());
-    window.set_lana_arousal(state.trial.arousal as i32);
+    window.set_lana_arousal((state.trial.arousal / 10) as i32);
     window.set_lana_reaction(state.trial.reaction_line().into());
     window.set_lana_events(
         format!(
@@ -252,12 +262,15 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
         ),
     };
     window.set_lana_clip(clip_status.into());
+    // Zone drives and total pleasure are per-mille in the engine; the
+    // meters display percent.
     let drives = state.trial.zone_drives();
-    window.set_zone_ext(drives[Zone::External as usize] as i32);
-    window.set_zone_int(drives[Zone::Internal as usize] as i32);
-    window.set_zone_anal(drives[Zone::Anal as usize] as i32);
-    window.set_zone_nip(drives[Zone::Nipples as usize] as i32);
-    window.set_total_pleasure(state.trial.total_pleasure());
+    let pct = |pm: u32| ((pm / 10) as i32).min(100);
+    window.set_zone_ext(pct(drives[Zone::External as usize]));
+    window.set_zone_int(pct(drives[Zone::Internal as usize]));
+    window.set_zone_anal(pct(drives[Zone::Anal as usize]));
+    window.set_zone_nip(pct(drives[Zone::Nipples as usize]));
+    window.set_total_pleasure((state.trial.total_pleasure() / 10).clamp(0, 100));
     window.set_trace_image(trace_image(state));
 }
 

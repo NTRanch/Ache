@@ -117,6 +117,9 @@ export struct TrialToyRow {
     family: string,
     pleasure: int,
     force: int,
+    channel-count: int,
+    y-offset: int,
+    card-height: int,
     channels: [ChannelRow],
     spark: image,
 }
@@ -296,7 +299,7 @@ component Meter inherits VerticalLayout {
             horizontal-stretch: 1;
         }
         Text {
-            text: root.value + "‰";
+            text: root.value + "%";
             color: Theme.foreground;
             font-size: 11px;
             font-weight: 700;
@@ -308,10 +311,135 @@ component Meter inherits VerticalLayout {
         border-radius: 4px;
         Rectangle {
             x: 0px;
-            width: parent.width * max(root.value, 0) / 1000;
+            width: parent.width * clamp(root.value, 0, 100) / 100;
             height: 8px;
             background: root.bar-color;
             border-radius: 4px;
+        }
+    }
+}
+
+/// One toy on the trial rig: telemetry meters + per-channel sliders.
+/// Children are positioned absolutely — layout negotiation inside a
+/// repeated card proved unreliable in this Slint build.
+component TrialToyCard inherits Rectangle {
+    in property <TrialToyRow> data;
+    callback trial-remove(int);
+    callback channel-released(int, int, float);
+
+    height: data.card-height * 1px;
+    background: Theme.surface;
+    border-radius: 6px;
+
+    Text {
+        x: 8px;
+        y: 6px;
+        width: parent.width - 100px;
+        text: data.name;
+        color: Theme.foreground;
+        font-weight: 700;
+        overflow: elide;
+    }
+    Button {
+        x: parent.width - 84px;
+        y: 4px;
+        width: 76px;
+        text: "Remove";
+        clicked => { root.trial-remove(data.toy-index); }
+    }
+    Text {
+        x: 8px;
+        y: 38px;
+        text: "Pleasure (effect on her)";
+        color: Theme.muted;
+        font-size: 11px;
+    }
+    Text {
+        x: 196px;
+        y: 38px;
+        text: data.pleasure + "%";
+        color: Theme.foreground;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    Rectangle {
+        x: 8px;
+        y: 54px;
+        width: 212px;
+        height: 8px;
+        background: Theme.border;
+        border-radius: 4px;
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width * data.pleasure / 100;
+            height: 8px;
+            background: Theme.pink;
+            border-radius: 4px;
+        }
+    }
+    Text {
+        x: 236px;
+        y: 38px;
+        text: "Force / pressure";
+        color: Theme.muted;
+        font-size: 11px;
+    }
+    Text {
+        x: 424px;
+        y: 38px;
+        text: data.force + "%";
+        color: Theme.foreground;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    Rectangle {
+        x: 236px;
+        y: 54px;
+        width: 212px;
+        height: 8px;
+        background: Theme.border;
+        border-radius: 4px;
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width * data.force / 100;
+            height: 8px;
+            background: Theme.accent;
+            border-radius: 4px;
+        }
+    }
+    for channel[ci] in data.channels: Rectangle {
+        x: 0px;
+        y: (68 + ci * 30) * 1px;
+        width: parent.width;
+        height: 28px;
+        Text {
+            x: 8px;
+            y: 5px;
+            width: 170px;
+            text: channel.label;
+            color: Theme.muted;
+            font-size: 11px;
+            overflow: elide;
+        }
+        Slider {
+            x: 186px;
+            y: 2px;
+            width: 240px;
+            minimum: 0;
+            maximum: channel.max;
+            value: channel.level;
+            released(value) => {
+                root.channel-released(data.toy-index, ci, value);
+            }
+        }
+        Text {
+            x: 436px;
+            y: 5px;
+            text: channel.level + " / " + channel.max;
+            color: Theme.foreground;
+            font-size: 11px;
         }
     }
 }
@@ -370,6 +498,8 @@ export component MainWindow inherits Window {
     in property <int> total-pleasure: 0;
     in property <image> trace-image;
     in property <[TrialToyRow]> trial-toys;
+    in property <int> rig-height: 0;
+    in-out property <int> rig-scroll: 0;
     callback profile-selected(int);
     callback zone-changed(int, float);
     callback trial-remove(int);
@@ -493,7 +623,7 @@ export component MainWindow inherits Window {
                                 wrap: word-wrap;
                             }
                             ScrollView {
-                                vertical-stretch: 1;
+                                height: 300px;
                                 VerticalLayout {
                                     spacing: 8px;
                                     alignment: start;
@@ -560,13 +690,13 @@ export component MainWindow inherits Window {
                                     : root.lana-strip-idx == 2 ? Assets.lana-waiting
                                     : root.lana-strip-idx == 3 ? Assets.lana-success
                                     : Assets.lana-error;
-                                source-clip-x: root.lana-frame * 288;
+                                source-clip-x: root.lana-frame * 144;
                                 source-clip-y: 0;
-                                source-clip-width: 288;
+                                source-clip-width: 144;
                                 source-clip-height: 288;
-                                width: 288px;
+                                width: 144px;
                                 height: 288px;
-                                x: root.lana-x;
+                                x: 72px + root.lana-x;
                                 y: root.lana-y;
                             }
                         }
@@ -719,10 +849,13 @@ export component MainWindow inherits Window {
                         }
                         ScrollView {
                             vertical-stretch: 1;
-                            Text {
-                                text: root.profile-text;
-                                color: Theme.muted;
-                                wrap: word-wrap;
+                            VerticalLayout {
+                                alignment: start;
+                                Text {
+                                    text: root.profile-text;
+                                    color: Theme.muted;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
                     }
@@ -807,68 +940,53 @@ export component MainWindow inherits Window {
                             color: Theme.faint;
                             font-size: 10px;
                         }
-                        ScrollView {
+                        // NOTE: a `for` inside a ScrollView clips to the
+                        // first row in this Slint build (verified by pixel
+                        // measurement), so the rig list scrolls manually:
+                        // clipped viewport + offset content + step buttons.
+                        Rectangle {
                             vertical-stretch: 1;
-                            VerticalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                for toy in root.trial-toys: VerticalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Text {
-                                            text: toy.name;
-                                            color: Theme.foreground;
-                                            font-weight: 700;
-                                            horizontal-stretch: 1;
-                                            overflow: elide;
-                                        }
-                                        Button {
-                                            text: "Remove";
-                                            clicked => { root.trial-remove(toy.toy-index); }
+                            rig-view := Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                TouchArea {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    scroll-event(event) => {
+                                        root.rig-scroll = clamp(root.rig-scroll - event.delta-y / 1px, 0, max(0, root.rig-height - rig-view.height / 1px));
+                                        return EventResult.accept;
+                                    }
+                                }
+                                Rectangle {
+                                    y: -root.rig-scroll * 1px;
+                                    height: root.rig-height * 1px;
+                                    for toy in root.trial-toys: TrialToyCard {
+                                        y: toy.y-offset * 1px;
+                                        width: parent.width;
+                                        data: toy;
+                                        trial-remove(index) => { root.trial-remove(index); }
+                                        channel-released(toy-index, channel, value) => {
+                                            root.channel-released(toy-index, channel, value);
                                         }
                                     }
-                                    HorizontalLayout {
-                                        spacing: 10px;
-                                        Meter {
-                                            label: "Pleasure (effect on her)";
-                                            value: toy.pleasure;
-                                            bar-color: Theme.pink;
-                                            width: 220px;
-                                        }
-                                        Meter {
-                                            label: "Force / pressure";
-                                            value: toy.force;
-                                            width: 220px;
-                                        }
-                                    }
-                                    for channel[ci] in toy.channels: HorizontalLayout {
-                                        spacing: 6px;
-                                        Text {
-                                            text: channel.label;
-                                            color: Theme.muted;
-                                            font-size: 11px;
-                                            width: 170px;
-                                            overflow: elide;
-                                            vertical-alignment: center;
-                                        }
-                                        Slider {
-                                            minimum: 0;
-                                            maximum: channel.max;
-                                            value: channel.level;
-                                            width: 240px;
-                                            released(value) => {
-                                                root.channel-released(toy.toy-index, ci, value);
-                                            }
-                                        }
-                                        Text {
-                                            text: channel.level + " / " + channel.max;
-                                            color: Theme.foreground;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                        }
-                                    }
+                                }
+                            }
+                            Button {
+                                x: parent.width - 32px;
+                                y: 4px;
+                                width: 28px;
+                                text: "▲";
+                                clicked => {
+                                    root.rig-scroll = max(0, root.rig-scroll - 134);
+                                }
+                            }
+                            Button {
+                                x: parent.width - 32px;
+                                y: 40px;
+                                width: 28px;
+                                text: "▼";
+                                clicked => {
+                                    root.rig-scroll = clamp(root.rig-scroll + 134, 0, max(0, root.rig-height - rig-view.height / 1px));
                                 }
                             }
                         }
@@ -939,11 +1057,14 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                         }
                         ScrollView {
-                            vertical-stretch: 1;
-                            Text {
-                                text: root.lexicon-body;
-                                color: Theme.foreground;
-                                wrap: word-wrap;
+                            height: 430px;
+                            VerticalLayout {
+                                alignment: start;
+                                Text {
+                                    text: root.lexicon-body;
+                                    color: Theme.foreground;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
                         if root.lexicon-can-try: Button {
