@@ -3,6 +3,31 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
+## Unreleased — supplemental device configuration (branch pax/ache-iost-config-20261127)
+
+- The Buttplug provider now builds its device configuration through
+  the crate's config loader (`load_protocol_configs`), layering
+  ache's supplemental device configuration
+  (`mcp/device-config/supplemental.json`, buttplug user-config
+  format) over the embedded configuration. The previous construction
+  (`DeviceConfigurationManagerBuilder::default()`) produced an empty
+  configuration manager — no embedded entries at all — so this
+  also makes the embedded catalogue effective.
+- Supplemental entries (IoST census, config-addition class):
+  29 Vibratissimo models and the Svakom Echo Neo gain named device
+  entries through the existing generic capability mapping. Config
+  data only: no change to the `decide()` gate, defaults, or any
+  safety invariant. Identifiers follow each family's evidenced
+  pattern and are pending hardware-capture confirmation; the
+  remaining config-addition models whose identifiers are per-model
+  codes (MonsterPub, Honey Play Box, LiBo, Magic Motion, Satisfyer,
+  Ankni) are recorded as capture-blocked in the implementation
+  record, not guessed.
+- Load test `mcp/tests/supplemental_config.rs`: the supplemental
+  file parses through the crate loader, all 30 entries resolve to
+  their named definitions, and the embedded definitions are
+  unchanged (exactly +30).
+
 ## 1.4.0 — 2026-11-27 — the KoiSync and XToys landings
 
 Built on the 1.2.0 lineage (base c1e5a1f) and landed by merge with
