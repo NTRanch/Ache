@@ -1,0 +1,19 @@
+# ache.rumble/v1 recorded stream (synthetic, authored for the replay gate).
+# Columns: receive time in ms (ache's clock) <TAB> one event line, exactly
+# as a source would send it. Ticks run every 100 ms from 0 to 3000.
+# Covers: ramp, set-and-hold, unregistered source, out-of-range value,
+# stale timestamp, over-ceiling (source ceiling 90%), silence decay,
+# resume, explicit zero, refresh, second decay.
+0	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.0,"light":0.0,"t_ms":1}
+50	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.3,"light":0.1,"t_ms":2}
+150	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.6,"light":0.2,"t_ms":3}
+250	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.9,"light":0.5,"t_ms":4}
+350	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.9,"light":0.5,"t_ms":5}
+450	{"spec":"ache.rumble/v1","source":"stranger","heavy":1.0,"light":1.0,"t_ms":1}
+550	{"spec":"ache.rumble/v1","source":"torogao","heavy":1.2,"light":0.5,"t_ms":6}
+650	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.2,"light":0.2,"t_ms":5}
+750	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.8,"light":0.9,"t_ms":7}
+850	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.8,"light":0.95,"t_ms":8}
+1600	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.4,"light":0.0,"t_ms":9}
+1700	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.0,"light":0.0,"t_ms":10}
+2000	{"spec":"ache.rumble/v1","source":"torogao","heavy":0.5,"light":0.5,"t_ms":11}

@@ -21,6 +21,7 @@ mod guard;
 mod provider;
 mod provider_buttplug;
 mod provider_server_api;
+mod rumble;
 mod server;
 mod service;
 mod state;
@@ -73,12 +74,26 @@ fn main() -> ExitCode {
     let transport = transport::from_config(&config);
     let buttplug = buttplug_provider(&config);
     let (server_api, pairing) = server_api_provider(&config);
+    let rumble = config.rumble.clone();
     let server = Arc::new(
         Server::new(config, transport)
             .with_buttplug(buttplug)
             .with_server_api(server_api)
             .with_pairing(pairing),
     );
+    // The ache.rumble/v1 live input: only when the operator turned it
+    // on AND named a socket. Off is the default; a socket that cannot
+    // be bound refuses to serve rather than run half-configured.
+    if let (true, Some(socket)) = (rumble.enabled, rumble.socket.as_deref()) {
+        if let Err(error) = rumble::live::spawn(Arc::clone(&server), socket, rumble.tick_ms) {
+            eprintln!("ache: rumble input failed: {error}");
+            return ExitCode::from(EXIT_CONFIG_INVALID);
+        }
+        eprintln!(
+            "ache: rumble input ({}) listening on {socket}",
+            rumble::SPEC
+        );
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

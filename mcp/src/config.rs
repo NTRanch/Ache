@@ -10,6 +10,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::{ErrorCode, Result, err};
+use crate::rumble::{self, Mapping, Motor, RumbleConfig, SourceRegistration};
 
 /// Environment variable naming the config file. Unset means defaults.
 /// (Renamed from `LOVENSE_MCP_CONFIG` in the ache unification; the old
@@ -79,6 +80,8 @@ pub struct Config {
     pub server_api_token_pass_entry: String,
     /// Password-store path of the paired user id.
     pub server_api_uid_pass_entry: String,
+    /// The `ache.rumble/v1` event-source input. Default OFF.
+    pub rumble: RumbleConfig,
 }
 
 impl Default for Config {
@@ -95,6 +98,7 @@ impl Default for Config {
             server_api_enabled: false,
             server_api_token_pass_entry: SERVER_API_TOKEN_PASS_ENTRY_DEFAULT.to_string(),
             server_api_uid_pass_entry: SERVER_API_UID_PASS_ENTRY_DEFAULT.to_string(),
+            rumble: RumbleConfig::default(),
         }
     }
 }
@@ -112,6 +116,39 @@ struct RawConfig {
     watchdog_secs: Option<i64>,
     buttplug: Option<RawButtplug>,
     server_api: Option<RawServerApi>,
+    rumble: Option<RawRumble>,
+}
+
+/// The `[rumble]` section: the `ache.rumble/v1` input. Sources and
+/// mappings are declared here and nowhere else; unknown keys refuse.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRumble {
+    enabled: Option<bool>,
+    tick_ms: Option<i64>,
+    socket: Option<String>,
+    #[serde(default)]
+    source: Vec<RawRumbleSource>,
+    #[serde(default)]
+    map: Vec<RawRumbleMap>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRumbleSource {
+    id: String,
+    gain_percent: Option<i64>,
+    ceiling_percent: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRumbleMap {
+    source: String,
+    motor: String,
+    device: String,
+    function: String,
+    max_strength: Option<i64>,
 }
 
 /// The `[buttplug]` section: the embedded Buttplug provider's knobs.
@@ -217,6 +254,10 @@ impl Config {
                     )
                 }
             };
+        let rumble = match raw.rumble {
+            None => RumbleConfig::default(),
+            Some(section) => validate_rumble(section)?,
+        };
         Ok(Config {
             transport,
             host,
@@ -229,6 +270,7 @@ impl Config {
             server_api_enabled,
             server_api_token_pass_entry,
             server_api_uid_pass_entry,
+            rumble,
         })
     }
 
@@ -311,6 +353,186 @@ fn validate_pass_entry(field: &str, entry: String) -> Result<String> {
         );
     }
     Ok(entry)
+}
+
+/// A config identifier (source id, device id): printable, bounded.
+fn validate_ident(field: &str, value: &str, max: usize) -> Result<()> {
+    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
+        return invalid(
+            field,
+            format!("must be 1..={max} bytes with no control characters"),
+        );
+    }
+    Ok(())
+}
+
+fn validate_rumble(section: RawRumble) -> Result<RumbleConfig> {
+    let tick_ms = match section.tick_ms {
+        None => rumble::TICK_MS_DEFAULT,
+        Some(ms) => match u64::try_from(ms) {
+            Ok(ms) if (rumble::TICK_MS_MIN..=rumble::TICK_MS_MAX).contains(&ms) => ms,
+            _ => {
+                return invalid(
+                    "rumble.tick_ms",
+                    format!(
+                        "{ms} is outside {}..={}",
+                        rumble::TICK_MS_MIN,
+                        rumble::TICK_MS_MAX
+                    ),
+                );
+            }
+        },
+    };
+    let socket = match section.socket {
+        None => None,
+        Some(path) => {
+            if !path.starts_with('/')
+                || path.len() > rumble::SOCKET_PATH_BYTES_MAX
+                || path.chars().any(char::is_control)
+                || path.split('/').any(|part| part == "..")
+            {
+                return invalid(
+                    "rumble.socket",
+                    format!(
+                        "must be an absolute path of at most {} bytes with no `..`",
+                        rumble::SOCKET_PATH_BYTES_MAX
+                    ),
+                );
+            }
+            Some(path)
+        }
+    };
+    if section.source.len() > rumble::SOURCES_MAX {
+        return invalid(
+            "rumble.source",
+            format!("at most {} sources", rumble::SOURCES_MAX),
+        );
+    }
+    if section.map.len() > rumble::MAPPINGS_MAX {
+        return invalid(
+            "rumble.map",
+            format!("at most {} mappings", rumble::MAPPINGS_MAX),
+        );
+    }
+    let mut sources: Vec<SourceRegistration> = Vec::new();
+    for raw in section.source {
+        validate_ident("rumble.source.id", &raw.id, rumble::SOURCE_ID_BYTES_MAX)?;
+        if sources.iter().any(|source| source.id == raw.id) {
+            return invalid(
+                "rumble.source.id",
+                format!("`{}` is registered twice", raw.id),
+            );
+        }
+        let gain_percent = match raw.gain_percent {
+            None => 100,
+            Some(gain) => match u16::try_from(gain) {
+                Ok(gain)
+                    if (rumble::GAIN_PERCENT_MIN..=rumble::GAIN_PERCENT_MAX).contains(&gain) =>
+                {
+                    gain
+                }
+                _ => {
+                    return invalid(
+                        "rumble.source.gain_percent",
+                        format!(
+                            "{gain} is outside {}..={}",
+                            rumble::GAIN_PERCENT_MIN,
+                            rumble::GAIN_PERCENT_MAX
+                        ),
+                    );
+                }
+            },
+        };
+        let ceiling_percent = match raw.ceiling_percent {
+            None => rumble::CEILING_PERCENT_MAX,
+            Some(ceiling) => match u8::try_from(ceiling) {
+                Ok(ceiling) if ceiling <= rumble::CEILING_PERCENT_MAX => ceiling,
+                _ => {
+                    return invalid(
+                        "rumble.source.ceiling_percent",
+                        format!("{ceiling} is outside 0..={}", rumble::CEILING_PERCENT_MAX),
+                    );
+                }
+            },
+        };
+        sources.push(SourceRegistration {
+            id: raw.id,
+            gain_percent,
+            ceiling_percent,
+        });
+    }
+    let mut mappings: Vec<Mapping> = Vec::new();
+    for raw in section.map {
+        if !sources.iter().any(|source| source.id == raw.source) {
+            return invalid(
+                "rumble.map.source",
+                format!("`{}` is not a registered source", raw.source),
+            );
+        }
+        let Some(motor) = Motor::parse(&raw.motor) else {
+            return invalid(
+                "rumble.map.motor",
+                format!("`{}` is not heavy or light", raw.motor),
+            );
+        };
+        validate_ident(
+            "rumble.map.device",
+            &raw.device,
+            rumble::DEVICE_ID_BYTES_MAX,
+        )?;
+        if !rumble::FUNCTIONS.contains(&raw.function.as_str()) {
+            return invalid(
+                "rumble.map.function",
+                format!(
+                    "`{}` is not one of {}",
+                    raw.function,
+                    rumble::FUNCTIONS.join(", ")
+                ),
+            );
+        }
+        let max_strength = match raw.max_strength {
+            None => rumble::MAX_STRENGTH_MAX,
+            Some(max) => match u8::try_from(max) {
+                Ok(max) if max <= rumble::MAX_STRENGTH_MAX => max,
+                _ => {
+                    return invalid(
+                        "rumble.map.max_strength",
+                        format!("{max} is outside 0..={}", rumble::MAX_STRENGTH_MAX),
+                    );
+                }
+            },
+        };
+        let mapping = Mapping {
+            source: raw.source,
+            motor,
+            device: raw.device,
+            function: raw.function,
+            max_strength,
+        };
+        if mappings.iter().any(|m| {
+            (&m.source, m.motor, &m.device, &m.function)
+                == (
+                    &mapping.source,
+                    mapping.motor,
+                    &mapping.device,
+                    &mapping.function,
+                )
+        }) {
+            return invalid("rumble.map", "the same mapping is declared twice");
+        }
+        mappings.push(mapping);
+    }
+    let enabled = section.enabled.unwrap_or(false);
+    if enabled && mappings.is_empty() {
+        return invalid("rumble.enabled", "enabled with no [[rumble.map]] entries");
+    }
+    Ok(RumbleConfig {
+        enabled,
+        tick_ms,
+        socket,
+        sources,
+        mappings,
+    })
 }
 
 fn invalid<T>(field: &str, reason: impl AsRef<str>) -> Result<T> {
@@ -573,5 +795,157 @@ mod tests {
                 .replace('"', "\\\"")
                 .replace('\n', "\\n")
         )
+    }
+}
+
+#[cfg(test)]
+mod rumble_config_tests {
+    use super::*;
+
+    const GOOD: &str = r#"[rumble]
+enabled = true
+tick_ms = 200
+socket = "/run/user/1000/ache-rumble.sock"
+[[rumble.source]]
+id = "torogao"
+gain_percent = 150
+ceiling_percent = 80
+[[rumble.map]]
+source = "torogao"
+motor = "heavy"
+device = "buttplug:1"
+function = "Vibrate"
+max_strength = 12
+[[rumble.map]]
+source = "torogao"
+motor = "light"
+device = "buttplug:0"
+function = "Suction"
+"#;
+
+    fn refused_field(text: &str) -> String {
+        match Config::from_toml_str(text) {
+            Ok(config) => panic!("config was accepted: {:?}", config.rumble),
+            Err(error) => {
+                assert_eq!(error.code, ErrorCode::ConfigInvalid);
+                error.message
+            }
+        }
+    }
+
+    // --- validation ---
+
+    #[test]
+    fn rumble_is_off_by_default() {
+        let config = Config::from_toml_str("").unwrap();
+        assert!(!config.rumble.enabled);
+        assert!(config.rumble.sources.is_empty() && config.rumble.mappings.is_empty());
+        assert_eq!(config.rumble.socket, None);
+        let config = Config::from_toml_str("[rumble]\n").unwrap();
+        assert!(!config.rumble.enabled, "an empty section stays master-off");
+    }
+
+    #[test]
+    fn a_full_rumble_section_parses_with_defaults_filled() {
+        let rumble = Config::from_toml_str(GOOD).unwrap().rumble;
+        assert!(rumble.enabled);
+        assert_eq!(rumble.tick_ms, 200);
+        assert_eq!(
+            rumble.socket.as_deref(),
+            Some("/run/user/1000/ache-rumble.sock")
+        );
+        assert_eq!(
+            rumble.sources,
+            vec![SourceRegistration {
+                id: "torogao".into(),
+                gain_percent: 150,
+                ceiling_percent: 80
+            }]
+        );
+        assert_eq!(rumble.mappings[0].motor, Motor::Heavy);
+        assert_eq!(rumble.mappings[0].max_strength, 12);
+        assert_eq!(rumble.mappings[1].function, "Suction");
+        assert_eq!(rumble.mappings[1].max_strength, 20, "default is full scale");
+    }
+
+    // --- adversarial ---
+
+    #[test]
+    fn rumble_out_of_range_knobs_are_refused_by_field() {
+        let socket = r#"socket = "/run/user/1000/ache-rumble.sock""#;
+        for (from, to, field) in [
+            ("tick_ms = 200", "tick_ms = 99", "rumble.tick_ms"),
+            ("tick_ms = 200", "tick_ms = 1001", "rumble.tick_ms"),
+            (
+                "gain_percent = 150",
+                "gain_percent = 0",
+                "rumble.source.gain_percent",
+            ),
+            (
+                "gain_percent = 150",
+                "gain_percent = 501",
+                "rumble.source.gain_percent",
+            ),
+            (
+                "ceiling_percent = 80",
+                "ceiling_percent = 101",
+                "rumble.source.ceiling_percent",
+            ),
+            (
+                "max_strength = 12",
+                "max_strength = 21",
+                "rumble.map.max_strength",
+            ),
+            (
+                r#"motor = "heavy""#,
+                r#"motor = "left""#,
+                "rumble.map.motor",
+            ),
+            (
+                r#"function = "Vibrate""#,
+                r#"function = "Stroke""#,
+                "rumble.map.function",
+            ),
+            (
+                r#"function = "Vibrate""#,
+                r#"function = "Thrusting""#,
+                "rumble.map.function",
+            ),
+            (socket, r#"socket = "relative.sock""#, "rumble.socket"),
+            (socket, r#"socket = "/run/../etc/x""#, "rumble.socket"),
+        ] {
+            let text = GOOD.replacen(from, to, 1);
+            assert_ne!(text, GOOD, "{from} must occur in the fixture");
+            let message = refused_field(&text);
+            assert!(message.contains(field), "{to}: {message}");
+        }
+    }
+
+    #[test]
+    fn rumble_mapping_must_name_a_registered_source_and_be_unique() {
+        let text = GOOD.replacen(
+            "source = \"torogao\"\nmotor = \"heavy\"",
+            "source = \"stranger\"\nmotor = \"heavy\"",
+            1,
+        );
+        assert!(refused_field(&text).contains("rumble.map.source"));
+        let text = format!("{GOOD}[[rumble.source]]\nid = \"torogao\"\n");
+        assert!(refused_field(&text).contains("registered twice"));
+        let text = format!(
+            "{GOOD}[[rumble.map]]\nsource = \"torogao\"\nmotor = \"heavy\"\n\
+             device = \"buttplug:1\"\nfunction = \"Vibrate\"\n"
+        );
+        assert!(refused_field(&text).contains("declared twice"));
+    }
+
+    #[test]
+    fn rumble_enabled_without_mappings_and_unknown_keys_refuse() {
+        assert!(refused_field("[rumble]\nenabled = true\n").contains("rumble.enabled"));
+        let error = Config::from_toml_str("[rumble]\nstrength = 20\n").unwrap_err();
+        assert_eq!(error.code, ErrorCode::ConfigInvalid);
+        let error =
+            Config::from_toml_str("[rumble]\n[[rumble.source]]\nid = \"a\"\ntoken = \"x\"\n")
+                .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ConfigInvalid);
     }
 }

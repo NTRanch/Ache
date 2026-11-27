@@ -33,6 +33,7 @@ use crate::decide::{
 use crate::error::{AcheError, ErrorCode};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
 use crate::provider_server_api::{NoPairing, PairingProvider};
+use crate::rumble::{self, RumbleEvent};
 use crate::state::SafetyState;
 use crate::transport::Transport;
 
@@ -84,6 +85,11 @@ pub struct Server {
     state: Arc<Mutex<SafetyState>>,
     output_lock: Arc<Mutex<()>>,
     score: Mutex<Option<Arc<ScoreRun>>>,
+    /// The `ache.rumble/v1` router (master-off unless configured on).
+    rumble: Mutex<rumble::Router>,
+    /// Devices the rumble mappings resolved to, cached so a tick never
+    /// waits on a discovery scan twice; cleared by every stop path.
+    rumble_targets: Mutex<std::collections::BTreeMap<String, Device>>,
 }
 
 struct ScoreRun {
@@ -118,6 +124,7 @@ impl Server {
     /// replace them (production wiring in `main` always does).
     pub fn new(config: Config, transport: Option<Box<dyn Transport>>) -> Server {
         let lovense = LovenseProvider::new(&config, transport);
+        let rumble = rumble::Router::new(config.rumble.clone());
         Server {
             config,
             lovense: Arc::new(lovense),
@@ -137,6 +144,8 @@ impl Server {
             state: Arc::new(Mutex::new(SafetyState::new())),
             output_lock: Arc::new(Mutex::new(())),
             score: Mutex::new(None),
+            rumble: Mutex::new(rumble),
+            rumble_targets: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -550,6 +559,7 @@ impl Server {
     /// marks the session dropped; the first failure is the error.
     fn send_stop_strict(&self) -> Result<bool, AcheError> {
         self.cancel_score();
+        self.reset_rumble();
         let lovense = self.lovense.zero();
         let buttplug = self.buttplug.zero();
         let server_api = self.server_api.zero();
@@ -571,6 +581,7 @@ impl Server {
     /// means the session is gone and is recorded as a drop.
     fn send_stop_best_effort(&self) {
         self.cancel_score();
+        self.reset_rumble();
         let lovense_failed = self.lovense.zero().is_err();
         let buttplug_failed = self.buttplug.zero().is_err();
         let server_api_failed = self.server_api.zero().is_err();
@@ -863,6 +874,132 @@ impl Server {
 
     pub fn output_active(&self) -> bool {
         self.lock_state().output_active()
+    }
+
+    /// Every stop path forgets held rumble: after a stop, a source
+    /// must send again (and the master be re-armed) before anything
+    /// moves.
+    fn reset_rumble(&self) {
+        self.rumble
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .reset();
+        self.rumble_targets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clear();
+    }
+
+    /// Accept one `ache.rumble/v1` event line at receive time
+    /// `now_ms`, or refuse it by name. Ingesting never sends: output
+    /// happens only at the tick.
+    pub fn rumble_ingest(&self, line: &str, now_ms: u64) -> Result<(), AcheError> {
+        let event = RumbleEvent::parse(line).map_err(|refusal| refusal.to_error())?;
+        self.rumble
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .ingest(&event, now_ms)
+            .map_err(|refusal| refusal.to_error())
+    }
+
+    /// The rumble session tick: the router decides what to emit, and
+    /// every emission passes the same `decide_plan` gate as any tool
+    /// output — armed, a target, the ceiling, the device's own range —
+    /// before its provider sees it. A deny sends nothing. Returns one
+    /// report entry per emission.
+    pub fn rumble_tick(&self, now_ms: u64) -> Result<Vec<Value>, AcheError> {
+        let outputs = self
+            .rumble
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .tick(now_ms)
+            .map_err(|refusal| refusal.to_error())?;
+        let mut report = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let (entry, dropped) = self.rumble_emit(&output);
+            report.push(entry);
+            if dropped {
+                // A failed send is a session drop: stop this tick.
+                break;
+            }
+        }
+        Ok(report)
+    }
+
+    fn rumble_target(&self, id: &str) -> Result<Device, AcheError> {
+        if let Some(device) = self
+            .rumble_targets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(id)
+        {
+            return Ok(device.clone());
+        }
+        let device = self.resolve_device(id)?;
+        self.rumble_targets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(id.to_string(), device.clone());
+        Ok(device)
+    }
+
+    /// Gate and send one rumble emission. Returns the report entry and
+    /// whether the send failed (a session drop).
+    fn rumble_emit(&self, output: &rumble::RumbleOutput) -> (Value, bool) {
+        let denied = |error: AcheError| {
+            json!({
+                "device": output.device,
+                "function": output.function,
+                "requested": output.strength,
+                "gate": { "decision": "deny" },
+                "error": error.to_json()["error"],
+            })
+        };
+        let target = match self.rumble_target(&output.device) {
+            Ok(target) => target,
+            Err(error) => return (denied(error), false),
+        };
+        let _output = self.output_lock.lock().unwrap();
+        if self.score_running() {
+            let error = AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop the running score before rumble output",
+            );
+            return (denied(error), false);
+        }
+        let intent = retarget(
+            OutputIntent::Function(FunctionIntent {
+                feature: output.function.clone(),
+                strength: output.strength,
+                time_sec: rumble::OUTPUT_TIME_SEC,
+                toy: None,
+            }),
+            &target,
+        );
+        let plan = match decide_plan(&self.snapshot(), &intent, &target.caps()) {
+            Ok(plan) => plan,
+            Err(error) => return (denied(error), false),
+        };
+        let sent = match target.provider {
+            ProviderId::Lovense => self.lovense.send_gate_body(&lovense_wire(&plan).0),
+            ProviderId::Buttplug => self.buttplug.execute(&plan),
+            ProviderId::ServerApi => self.server_api.execute(&plan),
+        };
+        let allowed = json!({
+            "device": output.device,
+            "function": output.function,
+            "requested": output.strength,
+            "gate": { "decision": "allow", "clamped": plan.clamped() },
+            "effective": plan_effective(&plan),
+        });
+        match self.finish_output(sent, allowed) {
+            Ok(entry) => (entry, false),
+            Err(error) => {
+                let mut entry = denied(error);
+                entry["gate"] = json!({ "decision": "allow", "sent": false });
+                (entry, true)
+            }
+        }
     }
 
     /// The explicit shutdown path: input ended while output is active.
@@ -2097,6 +2234,7 @@ mod tests {
             include_str!("state.rs"),
             include_str!("provider.rs"),
             include_str!("provider_buttplug.rs"),
+            include_str!("rumble.rs"),
         ];
         for source in sources {
             let production = source.split("#[cfg(test)]").next().unwrap();
@@ -3631,5 +3769,296 @@ mod score_tests {
         assert_zeroed(&fixture);
         assert!(!server.score_running());
         assert!(server.start_score(&parts(1)).is_err());
+    }
+}
+
+// The ache.rumble/v1 battery: the router behind the real server, the
+// Buttplug fixture as the device, every emission through decide_plan.
+// Half validation, half adversarial.
+#[cfg(test)]
+mod rumble_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+    use crate::provider::FakeButtplug;
+    use crate::rumble::{Mapping, Motor, RumbleConfig, SourceRegistration};
+    use crate::transport::MockTransport;
+
+    const STREAM: &str = include_str!("../tests/fixtures/rumble-stream-v1.tsv");
+    const GOLDEN: &str = include_str!("../tests/fixtures/rumble-stream-v1.golden");
+
+    fn rumble_config(ceiling_percent: u8) -> RumbleConfig {
+        let map = |motor, device: &str, max_strength| Mapping {
+            source: "torogao".into(),
+            motor,
+            device: device.into(),
+            function: "Vibrate".into(),
+            max_strength,
+        };
+        RumbleConfig {
+            enabled: true,
+            tick_ms: 100,
+            socket: None,
+            sources: vec![SourceRegistration {
+                id: "torogao".into(),
+                gain_percent: 100,
+                ceiling_percent,
+            }],
+            mappings: vec![
+                map(Motor::Heavy, "buttplug:1", 20),
+                map(Motor::Light, "buttplug:0", 10),
+            ],
+        }
+    }
+
+    type Rig = (Server, Arc<Mutex<Vec<AllowedOutput>>>, Arc<AtomicBool>);
+
+    fn rig(config: Config) -> Rig {
+        let fake = FakeButtplug::new();
+        let executed = fake.executed_log();
+        let fail = fake.fail_flag();
+        let server =
+            Server::new(config, Some(Box::new(MockTransport::new()))).with_buttplug(Box::new(fake));
+        (server, executed, fail)
+    }
+
+    fn armed_rig(ceiling_percent: u8) -> Rig {
+        let rig = rig(Config {
+            rumble: rumble_config(ceiling_percent),
+            ..Config::default()
+        });
+        rig.0.arm().unwrap();
+        rig
+    }
+
+    fn line(heavy: f64, light: f64, t_ms: u64) -> String {
+        format!(
+            r#"{{"spec":"ache.rumble/v1","source":"torogao","heavy":{heavy},"light":{light},"t_ms":{t_ms}}}"#
+        )
+    }
+
+    fn vibrate(toy: &str, strength: i64) -> AllowedOutput {
+        AllowedOutput::Function {
+            feature: "Vibrate".into(),
+            strength,
+            time_sec: rumble::OUTPUT_TIME_SEC,
+            toy: toy.into(),
+            clamped: false,
+        }
+    }
+
+    /// Replay the recorded stream through a fresh armed server and
+    /// return the transcript: every refusal and every gate report, one
+    /// line each, in order.
+    fn replay() -> String {
+        let (server, executed, _) = armed_rig(90);
+        let mut events: Vec<(u64, &str)> = STREAM
+            .lines()
+            .filter(|row| !row.starts_with('#') && !row.is_empty())
+            .map(|row| {
+                let (at, event) = row.split_once('\t').expect("tab-separated row");
+                (at.parse().expect("receive time"), event)
+            })
+            .collect();
+        events.reverse();
+        let mut transcript = String::new();
+        for tick in (0..=3_000).step_by(100) {
+            while events.last().is_some_and(|(at, _)| *at <= tick) {
+                let (at, event) = events.pop().unwrap();
+                if let Err(error) = server.rumble_ingest(event, at) {
+                    transcript.push_str(&format!("{at} ingest {}\n", error.message));
+                }
+            }
+            for entry in server.rumble_tick(tick).unwrap() {
+                transcript.push_str(&format!("{tick} tick {entry}\n"));
+            }
+        }
+        let executed = executed.lock().unwrap().len();
+        transcript.push_str(&format!("executed {executed}\n"));
+        transcript
+    }
+
+    // --- validation ---------------------------------------------------
+
+    #[test]
+    fn rumble_reaches_the_device_only_through_the_gate_at_the_tick() {
+        let (server, executed, _) = armed_rig(100);
+        server.rumble_ingest(&line(0.5, 1.0, 1), 0).unwrap();
+        assert!(executed.lock().unwrap().is_empty(), "ingest never sends");
+        let report = server.rumble_tick(0).unwrap();
+        assert_eq!(report.len(), 2);
+        assert!(
+            report
+                .iter()
+                .all(|entry| entry["gate"]["decision"] == "allow")
+        );
+        assert_eq!(
+            *executed.lock().unwrap(),
+            vec![vibrate("buttplug:0", 10), vibrate("buttplug:1", 10)]
+        );
+        assert!(server.output_active());
+    }
+
+    #[test]
+    fn the_global_ceiling_clamps_rumble_like_any_output() {
+        let (server, executed, _) = rig(Config {
+            rumble: rumble_config(100),
+            intensity_ceiling: 8,
+            ..Config::default()
+        });
+        server.arm().unwrap();
+        server.rumble_ingest(&line(1.0, 0.0, 1), 0).unwrap();
+        let report = server.rumble_tick(0).unwrap();
+        assert_eq!(report[0]["requested"], 20);
+        assert_eq!(report[0]["gate"]["clamped"], true);
+        assert_eq!(report[0]["effective"]["strength"], 8);
+        let AllowedOutput::Function { strength, .. } = &executed.lock().unwrap()[0] else {
+            panic!("a function plan");
+        };
+        assert_eq!(*strength, 8);
+    }
+
+    #[test]
+    fn a_recorded_stream_replays_byte_identically_three_times() {
+        let runs = [replay(), replay(), replay()];
+        assert_eq!(runs[0], runs[1]);
+        assert_eq!(runs[1], runs[2]);
+        // The actual transcript is left in target/ as gate evidence
+        // (and for review when it diverges from the golden).
+        let actual = concat!(env!("CARGO_MANIFEST_DIR"), "/target/rumble-replay-v1.txt");
+        std::fs::write(actual, &runs[0]).unwrap();
+        assert_eq!(
+            runs[0], GOLDEN,
+            "replay diverged from the recorded golden transcript"
+        );
+    }
+
+    // --- adversarial --------------------------------------------------
+
+    #[test]
+    fn master_off_by_default_rumble_is_refused_before_any_state() {
+        let (server, executed, _) = rig(Config::default());
+        let error = server.rumble_ingest(&line(1.0, 1.0, 1), 0).unwrap_err();
+        assert!(
+            error.message.contains("rumble_disabled"),
+            "{}",
+            error.message
+        );
+        assert!(
+            server
+                .rumble_tick(0)
+                .unwrap_err()
+                .message
+                .contains("rumble_disabled")
+        );
+        assert!(executed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn enabled_but_disarmed_rumble_is_denied_by_the_gate_and_sends_nothing() {
+        let (server, executed, _) = rig(Config {
+            rumble: rumble_config(100),
+            ..Config::default()
+        });
+        server.rumble_ingest(&line(1.0, 1.0, 1), 0).unwrap();
+        let report = server.rumble_tick(0).unwrap();
+        assert_eq!(report.len(), 2);
+        for entry in &report {
+            assert_eq!(entry["gate"]["decision"], "deny");
+            assert_eq!(entry["error"]["code"], "not_armed");
+        }
+        assert!(executed.lock().unwrap().is_empty());
+        assert!(!server.output_active());
+    }
+
+    #[test]
+    fn unregistered_and_over_ceiling_events_are_refused_by_name() {
+        let (server, executed, _) = armed_rig(50);
+        let stranger =
+            r#"{"spec":"ache.rumble/v1","source":"stranger","heavy":1,"light":1,"t_ms":1}"#;
+        let error = server.rumble_ingest(stranger, 0).unwrap_err();
+        assert!(
+            error.message.contains("unregistered_source"),
+            "{}",
+            error.message
+        );
+        let error = server.rumble_ingest(&line(0.51, 0.0, 1), 0).unwrap_err();
+        assert!(error.message.contains("over_ceiling"), "{}", error.message);
+        assert!(server.rumble_tick(0).unwrap().is_empty());
+        assert!(executed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stop_forgets_held_rumble_and_rearm_does_not_resume_it() {
+        let (server, executed, _) = armed_rig(100);
+        server.rumble_ingest(&line(1.0, 0.0, 1), 0).unwrap();
+        assert_eq!(server.rumble_tick(0).unwrap().len(), 1);
+        server.stop().unwrap();
+        server.arm().unwrap();
+        // Within the hold window, but the stop wiped the held value.
+        assert!(server.rumble_tick(100).unwrap().is_empty());
+        assert!(server.rumble_tick(500).unwrap().is_empty());
+        assert_eq!(executed.lock().unwrap().len(), 1);
+    }
+
+    fn socket_path(tag: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("ache-rumble-{tag}-{}.sock", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn the_live_socket_feeds_the_router_and_the_ticker_emits() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let (server, executed, _) = armed_rig(100);
+        let server = Arc::new(server);
+        let path = socket_path("live");
+        let _ = std::fs::remove_file(&path);
+        rumble::live::spawn(Arc::clone(&server), &path, 100).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the socket is owner-only");
+        let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        writeln!(stream, "{}", line(0.5, 0.0, 1)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while executed.lock().unwrap().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the ticker never emitted"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(executed.lock().unwrap()[0], vibrate("buttplug:1", 10));
+        server.stop().unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn the_live_socket_refuses_to_replace_an_existing_path() {
+        let (server, _, _) = armed_rig(100);
+        let path = socket_path("exists");
+        std::fs::write(&path, b"not a socket").unwrap();
+        let error = rumble::live::spawn(Arc::new(server), &path, 100).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a socket");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_rumble_send_is_a_session_drop_that_latches_off() {
+        let (server, _, fail) = armed_rig(100);
+        server.rumble_ingest(&line(1.0, 1.0, 1), 0).unwrap();
+        fail.store(true, Ordering::SeqCst);
+        let report = server.rumble_tick(0).unwrap();
+        assert_eq!(report.len(), 1, "the tick stops at the first failed send");
+        assert_eq!(report[0]["gate"]["sent"], false);
+        assert!(!server.lock_state().armed());
+        fail.store(false, Ordering::SeqCst);
+        server.rumble_ingest(&line(1.0, 1.0, 2), 100).unwrap();
+        for entry in server.rumble_tick(100).unwrap() {
+            assert_eq!(entry["error"]["code"], "not_armed");
+        }
     }
 }

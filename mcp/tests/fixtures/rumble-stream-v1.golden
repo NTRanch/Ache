@@ -1,0 +1,23 @@
+100 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":1,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":1}
+100 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":6,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":6}
+200 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":2,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":2}
+200 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":12,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":12}
+300 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":5,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":5}
+300 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":18,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":18}
+450 ingest rumble refused (unregistered_source): source "stranger" is not registered
+550 ingest rumble refused (value_out_of_range): Heavy value 1.2 is outside 0..=1
+650 ingest rumble refused (stale_timestamp): source "torogao" t_ms 5 does not follow 5
+800 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":9,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":9}
+800 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":16,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":16}
+850 ingest rumble refused (over_ceiling): source "torogao" Light 950/1000 exceeds its registered ceiling 900/1000
+1300 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":0,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":0}
+1300 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":0,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":0}
+1600 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":8,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":8}
+1700 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":0,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":0}
+2000 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":5,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":5}
+2000 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":10,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":10}
+2500 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":5,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":5}
+2500 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":10,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":10}
+2600 tick {"device":"buttplug:0","effective":{"device":"buttplug:0","feature":"Vibrate","strength":0,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":0}
+2600 tick {"device":"buttplug:1","effective":{"device":"buttplug:1","feature":"Vibrate","strength":0,"time_sec":1},"function":"Vibrate","gate":{"clamped":false,"decision":"allow"},"requested":0}
+executed 18
