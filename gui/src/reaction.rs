@@ -16,7 +16,7 @@
 //!   tense, recoil, settle) the clips also target.
 //!
 //! Tonight the GUI renders PROCEDURAL placeholder reactions through
-//! this interface (helper-strip frames + offsets driven by these
+//! this interface (full-body figure-strip frames + offsets driven by these
 //! parameters), honestly labelled as placeholders. When
 //! torogao-motion-clip/2 reaction clips for Lana land, the trial
 //! registers their keys in [`ClipRegistry`] and plays the clip
