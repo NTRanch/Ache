@@ -1,0 +1,1185 @@
+{
+  "version": {
+    "major": 5,
+    "minor": 57
+  },
+  "user_configs": {
+    "protocols": {
+      "vibratissimo": {
+        "configurations": [
+          {
+            "features": [
+              {
+                "id": "7e9d6c72-aab8-5af6-a37e-fe5d6e585482",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "5a20975e-4410-5245-b6c4-06bd2b0da119",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "f2f5fb56-50be-5acf-809d-c96ff0490cc6",
+            "identifier": [
+              "Anal Plug"
+            ],
+            "name": "Vibratissimo Anal Plug"
+          },
+          {
+            "features": [
+              {
+                "id": "29b459fa-ea25-5481-9ef9-b41a003bbcf9",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "6b130952-5d79-54e4-8db1-26fa00ebc943",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "4c3e775c-cac9-5020-89d7-d49182072f81",
+            "identifier": [
+              "Berlin"
+            ],
+            "name": "Vibratissimo Berlin"
+          },
+          {
+            "features": [
+              {
+                "id": "9a5985de-34ea-5b4b-9ffd-74583e65c1c6",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "90baa5d8-a536-514d-9ec9-5ad1a451281c",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "765158e8-cbbb-5d63-9b4f-4d7d1824dea9",
+            "identifier": [
+              "Blade"
+            ],
+            "name": "Vibratissimo Blade"
+          },
+          {
+            "features": [
+              {
+                "id": "2d08754b-f483-50e5-a854-63c8c84e7c5a",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "7334864b-ff6a-5dec-ab51-7e6604230c24",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "e6219fe0-18ec-587b-9730-f240ce8b01ea",
+            "identifier": [
+              "Cancun"
+            ],
+            "name": "Vibratissimo Cancun"
+          },
+          {
+            "features": [
+              {
+                "id": "a33579f1-bd25-5e7c-8610-0bdd742241ab",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "da1a7c72-e3e8-5bbd-8196-50b417c5424c",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "6eede810-c821-5bb8-babe-48578e5b0b34",
+            "identifier": [
+              "Cole"
+            ],
+            "name": "Vibratissimo Cole"
+          },
+          {
+            "features": [
+              {
+                "id": "a95927c5-38c7-58e5-8d8d-23e937ab6621",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "1e3a9c73-d9d8-5285-ad2f-e0022545946b",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "6beb324a-c3ae-5d39-8c2f-79891685fb6d",
+            "identifier": [
+              "Dubai"
+            ],
+            "name": "Vibratissimo Dubai"
+          },
+          {
+            "features": [
+              {
+                "id": "5f1453ad-4cc1-5fe2-8e55-31f456e0a4eb",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "9690746e-c8c5-55a7-86f4-38875f5c50f9",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "4f82765d-04fb-58ef-975f-e56feade909b",
+            "identifier": [
+              "DuoBall"
+            ],
+            "name": "Vibratissimo DuoBall"
+          },
+          {
+            "features": [
+              {
+                "id": "a344e6f4-a936-56a8-80a5-55111e4ca8e5",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "cb9b2340-1a13-5153-88a7-fc6a1a3e5082",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "8cd0391e-f465-5846-a171-b35476649ba4",
+            "identifier": [
+              "G-Vibrator"
+            ],
+            "name": "Vibratissimo G-Vibrator"
+          },
+          {
+            "features": [
+              {
+                "id": "4d9d71c8-b39a-5ac0-8756-40f1cc1e0ea7",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "86ddc4e4-ac9a-5ec2-9ede-66233d987a8c",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "a579fe94-c906-5068-9d0d-55db377193b4",
+            "identifier": [
+              "Hercules"
+            ],
+            "name": "Vibratissimo Hercules"
+          },
+          {
+            "features": [
+              {
+                "id": "04f82918-3bcc-5b37-9334-8b30eb5ebd56",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "93d3eafd-a74c-5588-bf0d-5f56f120f50b",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "ec9cf155-8e89-572e-89b6-55ceeccc6387",
+            "identifier": [
+              "Hollywood"
+            ],
+            "name": "Vibratissimo Hollywood"
+          },
+          {
+            "features": [
+              {
+                "id": "6198ce2e-c47a-5d80-8f44-4f0fcf50adcf",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "3c0ac70e-5241-5394-9f55-a53cf69a2344",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "287b234d-4385-5aff-ab20-3c9b0a94bfa0",
+            "identifier": [
+              "Lee"
+            ],
+            "name": "Vibratissimo Lee"
+          },
+          {
+            "features": [
+              {
+                "id": "4aac7c8d-7abe-5029-bd12-927efd853575",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "26fc4d72-0cdd-59dc-8648-c162482feba1",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "e5c24fad-c22f-5671-b96c-3eaf1709bfb7",
+            "identifier": [
+              "LieDown"
+            ],
+            "name": "Vibratissimo LieDown"
+          },
+          {
+            "features": [
+              {
+                "id": "cf6e8563-189a-5924-8358-e55b7c55943a",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "bc953497-09cf-5996-ab33-38fad1afb81e",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "e4b95eea-1e25-535f-a7ca-70544e8ed370",
+            "identifier": [
+              "Little Want"
+            ],
+            "name": "Vibratissimo Little Want"
+          },
+          {
+            "features": [
+              {
+                "id": "2fc5e820-d3db-531b-8ae6-59257e266aa3",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "14ce27dc-64a8-5cc2-99aa-81989ac5bb1a",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "34c8bcd6-def6-5a9c-8312-bb0fcf2af02b",
+            "identifier": [
+              "London"
+            ],
+            "name": "Vibratissimo London"
+          },
+          {
+            "features": [
+              {
+                "id": "147d335e-2315-511b-b2f4-0ced97f7edc9",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "a3e6ffe0-565e-58a4-b557-bdcca2809731",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "fdaab246-21a8-54ce-a2df-5527c6eb74c6",
+            "identifier": [
+              "Mini"
+            ],
+            "name": "Vibratissimo Mini"
+          },
+          {
+            "features": [
+              {
+                "id": "1e64a1ac-52fc-52cc-9941-25388a08b066",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "2e79aad4-3def-5af5-9a0e-e94e6e56a2d1",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "aa4a0c57-6066-5e59-942e-769da719c566",
+            "identifier": [
+              "Moskau"
+            ],
+            "name": "Vibratissimo Moskau"
+          },
+          {
+            "features": [
+              {
+                "id": "d3520392-606b-5e71-92fd-d6483c2d8a4e",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "c8e888aa-a236-5029-8730-5c84bcc845f9",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "8e7a77f3-40a7-53f8-b138-d86cdae1d4e4",
+            "identifier": [
+              "New York"
+            ],
+            "name": "Vibratissimo New York"
+          },
+          {
+            "features": [
+              {
+                "id": "dad59aff-f90c-56d0-81a7-64f61e6f10b7",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "67205d7e-6790-5e47-a4c7-df116a97b913",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "bd3b6dbe-04c3-526a-a697-3c69623423eb",
+            "identifier": [
+              "Obsession"
+            ],
+            "name": "Vibratissimo Obsession"
+          },
+          {
+            "features": [
+              {
+                "id": "666fc7b9-3e90-5f93-a69c-8661a427bc02",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "51ed5120-f9d6-5697-9953-e1e38329f509",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "7352809a-83e7-5012-86b9-90b3c48db1e4",
+            "identifier": [
+              "PantyBuster"
+            ],
+            "name": "Vibratissimo PantyBuster"
+          },
+          {
+            "features": [
+              {
+                "id": "819fde89-f5c4-54c5-bcf4-7477e878633c",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "12537e43-27c7-5dea-bb12-10c10af88b52",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "5e4ec041-ce89-58e8-aa71-2642581078ee",
+            "identifier": [
+              "PantyBuster Deluxe"
+            ],
+            "name": "Vibratissimo PantyBuster Deluxe"
+          },
+          {
+            "features": [
+              {
+                "id": "08d3ef75-6a88-5aaf-91b3-9dabc243b6ee",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "b6ffc138-fec5-5993-afa8-d0a2183c280d",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "bc4e2f76-95c2-5609-a7c0-be6b33ad3433",
+            "identifier": [
+              "Paris"
+            ],
+            "name": "Vibratissimo Paris"
+          },
+          {
+            "features": [
+              {
+                "id": "542831f3-4ed7-5fae-bed7-29a92875da34",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "b313dc61-b655-5a29-8db6-1e3afdbc68fd",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "5e004cf6-43b0-53e8-a0fe-c14c06eb66d8",
+            "identifier": [
+              "Power Want"
+            ],
+            "name": "Vibratissimo Power Want"
+          },
+          {
+            "features": [
+              {
+                "id": "00db4bf3-48bf-5394-bd6d-a3283232acfb",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "719eb77b-30ce-5b7b-ac4e-a57f003675f4",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "a0a52dee-89a1-56d1-a827-f9ee07ff775f",
+            "identifier": [
+              "Rambo"
+            ],
+            "name": "Vibratissimo Rambo"
+          },
+          {
+            "features": [
+              {
+                "id": "09196629-0a85-52c9-9b3c-0fa20f8736fe",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "4641b32a-f995-510e-8270-dbcad441ee45",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "175f0030-e11b-5df6-8125-de32d62c403b",
+            "identifier": [
+              "Rom"
+            ],
+            "name": "Vibratissimo Rom"
+          },
+          {
+            "features": [
+              {
+                "id": "17c3348d-8402-5d58-aa8e-5591d0d8c5d5",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "4c79d43d-6cad-5c17-b6f2-572eb10b2af7",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "214f563c-19e6-5bd8-bee3-266b225633a8",
+            "identifier": [
+              "SingleBall"
+            ],
+            "name": "Vibratissimo SingleBall"
+          },
+          {
+            "features": [
+              {
+                "id": "f0bf94ac-40ea-52e0-a02c-7b74890d146e",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "020b6afb-dd72-5798-b405-2a08e331251b",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "2160c3ec-5452-54a5-b024-068213905159",
+            "identifier": [
+              "Souta"
+            ],
+            "name": "Vibratissimo Souta"
+          },
+          {
+            "features": [
+              {
+                "id": "bb8f6ead-c6f6-538e-90f1-1702db0c6a34",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "277dbccb-9c07-57ff-ad1f-23a4be35bcb1",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "303d7e49-716d-5805-8b9e-abd9c141a40c",
+            "identifier": [
+              "Sydney"
+            ],
+            "name": "Vibratissimo Sydney"
+          },
+          {
+            "features": [
+              {
+                "id": "49da87e1-3074-51ae-b03f-dee6a0f95ceb",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "87248521-f230-565e-a16a-4755c8de5328",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "ed527cc3-a5f7-54e5-b97b-d4e97c783c74",
+            "identifier": [
+              "TouchMe"
+            ],
+            "name": "Vibratissimo TouchMe"
+          },
+          {
+            "features": [
+              {
+                "id": "388e57a7-0144-5b2d-bae1-48e915419bfc",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      255
+                    ]
+                  }
+                }
+              },
+              {
+                "description": "battery Level",
+                "id": "09d2ae89-5066-5a9d-ad75-2fd1e6c521f1",
+                "index": 1,
+                "input": {
+                  "battery": {
+                    "command": [
+                      "Read"
+                    ],
+                    "value": [
+                      [
+                        0,
+                        100
+                      ]
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "5a0efb92-b45e-5bfe-b44c-be2c69ac1e59",
+            "identifier": [
+              "VibroEgg"
+            ],
+            "name": "Vibratissimo VibroEgg"
+          }
+        ]
+      },
+      "svakom-v6": {
+        "configurations": [
+          {
+            "features": [
+              {
+                "id": "2e13d7fd-214c-5efd-bb1a-5bd603edb9a1",
+                "index": 0,
+                "output": {
+                  "vibrate": {
+                    "value": [
+                      0,
+                      10
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "a32feb0b-191a-5c57-91e0-d7713399fa46",
+            "identifier": [
+              "Echo Neo"
+            ],
+            "name": "Svakom Echo Neo"
+          }
+        ],
+        "communication": [
+          {
+            "btle": {
+              "names": [
+                "Echo Neo"
+              ],
+              "services": {
+                "0000ffe0-0000-1000-8000-00805f9b34fb": {
+                  "rx": "0000ffe2-0000-1000-8000-00805f9b34fb",
+                  "tx": "0000ffe1-0000-1000-8000-00805f9b34fb"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

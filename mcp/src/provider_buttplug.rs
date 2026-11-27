@@ -31,7 +31,7 @@ use buttplug_client_in_process::ButtplugInProcessClientConnectorBuilder;
 use buttplug_core::message::OutputType;
 use buttplug_server::ButtplugServerBuilder;
 use buttplug_server::device::ServerDeviceManagerBuilder;
-use buttplug_server_device_config::DeviceConfigurationManagerBuilder;
+use buttplug_server_device_config::{DeviceConfigurationManager, load_protocol_configs};
 use buttplug_server_hwmgr_btleplug::BtlePlugCommunicationManagerBuilder;
 use buttplug_server_hwmgr_serial::SerialPortCommunicationManagerBuilder;
 
@@ -226,12 +226,29 @@ fn provider_thread(
     let _ = runtime.block_on(client.stop_all_devices());
 }
 
+/// Ache's supplemental device configuration, in the buttplug
+/// user-configuration format: named device entries for models the
+/// pinned buttplug device configuration does not name, layered over
+/// the embedded configuration by the crate's own loader. Config data
+/// only — support still flows through the generic capability mapping
+/// and the `decide()` gate, so a supplemental entry widens the
+/// catalogue, never the authority. Entries and their provenance:
+/// `mcp/device-config/supplemental.json` (IoST census, config-addition
+/// class).
+const SUPPLEMENTAL_DEVICE_CONFIG: &str = include_str!("../device-config/supplemental.json");
+
+/// Build the device configuration manager: the embedded buttplug
+/// configuration plus ache's supplemental entries.
+fn device_configuration_manager() -> std::result::Result<DeviceConfigurationManager, String> {
+    load_protocol_configs(&None, &Some(SUPPLEMENTAL_DEVICE_CONFIG.to_owned()), false)
+        .and_then(|mut builder| builder.finish())
+        .map_err(|error| format!("device configuration: {error}"))
+}
+
 /// Build the embedded server (BLE + serial managers only) and connect
 /// an in-process client to it.
 async fn connect() -> std::result::Result<ButtplugClient, String> {
-    let config_manager = DeviceConfigurationManagerBuilder::default()
-        .finish()
-        .map_err(|error| format!("device configuration: {error}"))?;
+    let config_manager = device_configuration_manager()?;
     let mut manager_builder = ServerDeviceManagerBuilder::new(config_manager);
     manager_builder.comm_manager(BtlePlugCommunicationManagerBuilder::default());
     manager_builder.comm_manager(SerialPortCommunicationManagerBuilder::default());
