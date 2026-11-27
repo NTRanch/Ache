@@ -1437,6 +1437,7 @@ impl Server {
             ProviderId::Lovense => self.lovense.send_gate_body(&lovense_wire(&plan).0),
             ProviderId::Buttplug => self.buttplug.execute(&plan),
             ProviderId::ServerApi => self.server_api.execute(&plan),
+            ProviderId::Tcode => self.tcode.execute(&plan),
         };
         let allowed = json!({
             "device": output.device,
