@@ -485,6 +485,18 @@ export component MainWindow inherits Window {
     in property <string> lana-events: "";
     in property <string> lana-params: "";
     in property <string> lana-clip: "";
+    // --- Lana, picked up (drag state owned by drag.rs) ---
+    in property <length> lana-drag-x: 0px;
+    in property <length> lana-drag-y: 0px;
+    in property <angle> lana-angle: 0deg;
+    in property <length> lana-origin-x: 90px;
+    in property <length> lana-origin-y: 180px;
+    in property <bool> lana-held: false;
+    out property <length> lana-mouse-x: lana-touch.mouse-x;
+    out property <length> lana-mouse-y: lana-touch.mouse-y;
+    out property <bool> lana-pressed: lana-touch.pressed;
+    callback lana-grab(length, length);
+    callback lana-release();
     in property <string> profile-name: "Lana (her own)";
     in property <[float]> zone-values: [100.0, 100.0, 100.0, 100.0];
     in property <string> profile-text: "";
@@ -692,36 +704,67 @@ export component MainWindow inherits Window {
                         Rectangle {
                             width: 288px;
                             height: 360px;
-                            clip: true;
-                            background: Theme.surface;
-                            // Her glow — the room answers her arousal.
+                            // No background, no clip: she floats over
+                            // the lab gradient (Owner, 2026-11-27). The
+                            // only thing under her is a soft contact
+                            // shadow — an ellipse on her spot, never a
+                            // panel; it follows her across and thins
+                            // while she's lifted.
                             Rectangle {
-                                x: 24px;
-                                y: 20px;
-                                width: 240px;
-                                height: 320px;
-                                border-radius: 120px;
-                                background: @radial-gradient(circle, #ec489955, #ec489900);
-                                opacity: 0.25 + root.lana-arousal * 0.0075;
+                                x: 54px + root.lana-x + root.lana-drag-x + 22px;
+                                y: 338px;
+                                width: 136px;
+                                height: 16px;
+                                border-radius: 8px;
+                                background: @radial-gradient(circle, #00000059, #00000000);
+                                opacity: root.lana-held ? 0.45 : 1.0;
                             }
-                            Image {
-                                source: root.lana-strip-idx == 0 ? Assets.lana-idle
-                                    : root.lana-strip-idx == 1 ? Assets.lana-guiding
-                                    : root.lana-strip-idx == 2 ? Assets.lana-waiting
-                                    : root.lana-strip-idx == 3 ? Assets.lana-success
-                                    : Assets.lana-error;
-                                source-clip-x: root.lana-frame * 144;
-                                source-clip-y: 0;
-                                source-clip-width: 144;
-                                source-clip-height: 288;
+                            // The figure cluster: halo, figure, zone
+                            // glows — one element that moves, rotates
+                            // about the grab point, and takes the
+                            // pointer. Transform owned by drag.rs.
+                            lana-fig := Rectangle {
+                                x: 54px + root.lana-x + root.lana-drag-x;
+                                y: root.lana-y + root.lana-drag-y;
                                 width: 180px;
                                 height: 360px;
-                                x: 54px + root.lana-x;
-                                y: root.lana-y;
-                            }
+                                // Only the visual rotates. The drag
+                                // container — and the TouchArea below —
+                                // stays untransformed, so pointer
+                                // coords are plain figure-local and
+                                // the grab-point pin is exact at any
+                                // hang angle.
+                                lana-visual := Rectangle {
+                                width: 180px;
+                                height: 360px;
+                                transform-rotation: root.lana-angle;
+                                transform-origin: { x: root.lana-origin-x, y: root.lana-origin-y };
+                                // Her glow — the room answers her arousal.
+                                Rectangle {
+                                    x: -30px;
+                                    y: 20px;
+                                    width: 240px;
+                                    height: 320px;
+                                    border-radius: 120px;
+                                    background: @radial-gradient(circle, #ec489955, #ec489900);
+                                    opacity: 0.25 + root.lana-arousal * 0.0075;
+                                }
+                                Image {
+                                    source: root.lana-strip-idx == 0 ? Assets.lana-idle
+                                        : root.lana-strip-idx == 1 ? Assets.lana-guiding
+                                        : root.lana-strip-idx == 2 ? Assets.lana-waiting
+                                        : root.lana-strip-idx == 3 ? Assets.lana-success
+                                        : Assets.lana-error;
+                                    source-clip-x: root.lana-frame * 144;
+                                    source-clip-y: 0;
+                                    source-clip-width: 144;
+                                    source-clip-height: 288;
+                                    width: 180px;
+                                    height: 360px;
+                                }
                             // The zones being played, glowing on her body.
                             Rectangle {
-                                x: 96px;
+                                x: 42px;
                                 y: 98px;
                                 width: 96px;
                                 height: 44px;
@@ -730,7 +773,7 @@ export component MainWindow inherits Window {
                                 opacity: root.zone-nip * 0.008;
                             }
                             Rectangle {
-                                x: 116px;
+                                x: 62px;
                                 y: 155px;
                                 width: 56px;
                                 height: 30px;
@@ -739,7 +782,7 @@ export component MainWindow inherits Window {
                                 opacity: root.zone-ext * 0.008;
                             }
                             Rectangle {
-                                x: 124px;
+                                x: 70px;
                                 y: 174px;
                                 width: 52px;
                                 height: 28px;
@@ -748,7 +791,7 @@ export component MainWindow inherits Window {
                                 opacity: root.zone-int * 0.008;
                             }
                             Rectangle {
-                                x: 148px;
+                                x: 94px;
                                 y: 166px;
                                 width: 44px;
                                 height: 28px;
@@ -756,9 +799,24 @@ export component MainWindow inherits Window {
                                 background: @radial-gradient(circle, #f472b6aa, #ec489900);
                                 opacity: root.zone-anal * 0.008;
                             }
+                                }
+                            lana-touch := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: root.lana-held ? MouseCursor.grabbing : MouseCursor.grab;
+                                pointer-event(ev) => {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        root.lana-grab(self.mouse-x, self.mouse-y);
+                                    }
+                                    if (ev.kind == PointerEventKind.up) {
+                                        root.lana-release();
+                                    }
+                                }
+                            }
+                            }
                         }
                         Text {
-                            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class).";
+                            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class). Grab her and pick her up — where you hold her changes how she hangs.";
                             color: Theme.faint;
                             font-size: 10px;
                             wrap: word-wrap;

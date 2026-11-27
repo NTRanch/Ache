@@ -25,6 +25,7 @@
 #![deny(unsafe_code)]
 
 mod catalogue;
+mod drag;
 mod features;
 mod guide;
 mod lexicon;
@@ -56,6 +57,7 @@ struct AppState {
     selected: Option<usize>,
     trial: Trial,
     clips: ClipRegistry,
+    drag: drag::Drag,
 }
 
 impl AppState {
@@ -208,6 +210,18 @@ fn sync_trial_model(window: &MainWindow, state: &AppState) {
     window.set_combo_text(guide::explain_combination(&state.trial.toys).into());
 }
 
+/// Pushes the drag state machine's current transform (offset,
+/// hang angle, rotation origin) into the window.
+fn sync_drag(window: &MainWindow, state: &AppState) {
+    let d = &state.drag;
+    window.set_lana_drag_x(d.offset().0);
+    window.set_lana_drag_y(d.offset().1);
+    window.set_lana_angle(d.angle_deg());
+    window.set_lana_origin_x(d.origin().0);
+    window.set_lana_origin_y(d.origin().1);
+    window.set_lana_held(d.active());
+}
+
 /// Pushes Lana's live state (band, readouts, reaction parameters)
 /// into the window. Runs per trial tick.
 fn sync_lana(window: &MainWindow, state: &AppState) {
@@ -233,6 +247,11 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
     window.set_lana_stage(state.trial.stage().label().into());
     window.set_lana_arousal((state.trial.arousal / 10) as i32);
     window.set_lana_reaction(state.trial.reaction_line().into());
+    // While she's picked up, the held line replaces the trial's
+    // narration — same property, same path, no parallel system.
+    if state.drag.held() {
+        window.set_lana_reaction(state.drag.region().held_line().into());
+    }
     window.set_lana_events(
         format!(
             "Times she's come: {} · squirted: {} · her settings: {}",
@@ -489,6 +508,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         selected: None,
         trial: Trial::new(),
         clips: ClipRegistry::new(),
+        drag: drag::Drag::default(),
     }));
 
     let window = MainWindow::new()?;
@@ -693,6 +713,79 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 sync_lana(&window, &state);
             }
         });
+    }
+
+    // --- Lana, picked up: grab / release / the 30 ms drag step ---
+    {
+        let state = state.clone();
+        let weak = window.as_weak();
+        window.on_lana_grab(move |mx, my| {
+            let mut state = state.borrow_mut();
+            // Recover the pointer's panel position from the
+            // figure-local mouse coords: the TouchArea sits on
+            // the untransformed drag container, so panel =
+            // element position + local coords, exact at any hang
+            // angle. A re-grab mid-settle starts from where the
+            // hand actually is.
+            let d = &state.drag;
+            let pointer = (d.elem_pos().0 + mx, d.elem_pos().1 + my);
+            state
+                .drag
+                .begin(mx / drag::FIG_W, my / drag::FIG_H, pointer);
+            if let Some(window) = weak.upgrade() {
+                sync_drag(&window, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        window.on_lana_release(move || {
+            state.borrow_mut().drag.release();
+        });
+    }
+    let drag_timer = slint::Timer::default();
+    {
+        let state = state.clone();
+        let weak = window.as_weak();
+        // The last mouse reading stepped with. Slint refreshes
+        // mouse-x/y on pointer events only, so a parked pointer
+        // leaves a stale reading; re-stepping the pin from stale
+        // coords integrates the staleness into a creep. Only a
+        // changed reading carries new pointer information.
+        let last_mouse = std::rc::Rc::new(std::cell::Cell::new(None::<(f32, f32)>));
+        drag_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(30),
+            move || {
+                let mut state = state.borrow_mut();
+                if !state.drag.active() {
+                    last_mouse.set(None);
+                    return;
+                }
+                if let Some(window) = weak.upgrade() {
+                    // A release the TouchArea never delivered
+                    // (pointer left the window mid-drag) still
+                    // lets her go.
+                    if state.drag.held() && !window.get_lana_pressed() {
+                        state.drag.release();
+                    }
+                    let pointer = if state.drag.held() {
+                        let m = (window.get_lana_mouse_x(), window.get_lana_mouse_y());
+                        if last_mouse.get() == Some(m) {
+                            None
+                        } else {
+                            last_mouse.set(Some(m));
+                            let d = &state.drag;
+                            Some((d.elem_pos().0 + m.0, d.elem_pos().1 + m.1))
+                        }
+                    } else {
+                        None
+                    };
+                    state.drag.step(0.03, pointer);
+                    sync_drag(&window, &state);
+                }
+            },
+        );
     }
 
     // --- timers: turntable spin + the trial engine tick ---
