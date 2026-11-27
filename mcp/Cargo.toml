@@ -1,6 +1,6 @@
 [package]
 name = "ache"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "ache — unified haptics MCP stdio server: Lovense Standard API and embedded Buttplug.io behind one tool surface, every output through the pure decide() safety gate"

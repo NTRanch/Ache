@@ -3,7 +3,11 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
-## Unreleased — devices: for-her BLE bindings (1.3.0 or 1.4.0, set at landing)
+## 1.3.0 — 2026-11-26 — GHR programme: devices, rumble, Fredorch
+
+- ache.rumble/v1 event-source input: rumble events as a gated input source (GHR Phase 3).
+- url bumped to 2.5.9 (RUSTSEC-2026-0592).
+- Gates at landing: 250 tests passing (see the release record).
 
 - Four per-model bindings, each documented in the pinned Buttplug
   config: JoyHub RoseBUD and RoseLin Suction → constrict, and the
@@ -15,7 +19,7 @@ crate version in `mcp/Cargo.toml`.
 - Temperature, Led and Spray remain reported-but-refused.
   README "Toy coverage" now lists the BLE rows and the refusal for
   each class.
-- Gates: 221 tests passing (210 unit + 2 manifest + 9 stdio smoke).
+- Gates at that step: 221 tests passing (210 unit + 2 manifest + 9 stdio smoke).
 
 ## 1.1.0 — 2026-11-14 — score layer: multi-toy symphony
 
