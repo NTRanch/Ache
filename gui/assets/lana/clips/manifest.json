@@ -1,0 +1,454 @@
+{
+ "_render": "Eevee, 480x960, transparent film, cell 240x480, cols 12",
+ "_rig_blend": "/home/phaedrus/.local/share/pax/lana-rung1-20261127/build/out/lana.blend",
+ "_rig_blend_sha256": "247c1b3f8a67b5e4717fba230a21e417e064402e47184137d6ac487e0f95c998",
+ "_tool": "gui/tools/make_lana_clips.py + render_lana_clips.py",
+ "afterglow.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 144,
+  "freeze_sha256": "89d1bc382e320d5a3bd927f94f870e2d91fcbfdad0dfafe615feaa49f17160b1",
+  "source_clip": "lana_react_afterglow.t0.clip.json",
+  "strip_px": [
+   2880,
+   5760
+  ]
+ },
+ "afterglow.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 144,
+  "freeze_sha256": "85f0f0b1828ff66c65fa410b831c83a5bf8ce2d6c84c3a9a31f327785b9f5c7d",
+  "source_clip": "lana_react_afterglow.t1.clip.json",
+  "strip_px": [
+   2880,
+   5760
+  ]
+ },
+ "afterglow.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 144,
+  "freeze_sha256": "9a740cd8241a66ab5793c7d9914d0db9809a53c64d63edd30765f6565545f911",
+  "source_clip": "lana_react_afterglow.t2.clip.json",
+  "strip_px": [
+   2880,
+   5760
+  ]
+ },
+ "afterglow.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 144,
+  "freeze_sha256": "092cc6bb1b56fe42a8949ea40ab472500696f2bf436e9948f1de50624ce804cf",
+  "source_clip": "lana_react_afterglow.t3.clip.json",
+  "strip_px": [
+   2880,
+   5760
+  ]
+ },
+ "building.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "c70a71939a2f554f734cdb0fad2702ebdd40f583bafb29ed846e891188f658a5",
+  "source_clip": "lana_react_building.t0.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "building.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "9cd85fe85f4ad60af010eafd6ecc9a3d95154f9cf752a77839dfce063aaec0f8",
+  "source_clip": "lana_react_building.t1.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "building.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "eb7471b4a1244d79234ef610fe3c3d8efc34df80f0cc447fb52e6f52db3d2576",
+  "source_clip": "lana_react_building.t2.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "building.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "3209a1c01af193d38287670ed79ee8ad6902bfba940515cc48239652651856ed",
+  "source_clip": "lana_react_building.t3.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "composed.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "0a3522353e693f7f27c12f42c78bc1f605e16f177031d159ec3e9aee235fc38a",
+  "source_clip": "lana_react_composed.t0.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "composed.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "66314fb150d42de460920427cf495178dce6a9ce716cedbe49b04c8f6f301dd9",
+  "source_clip": "lana_react_composed.t1.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "composed.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "824e36a3deb4a7538319eb328f1eef4311e82f5eb515c9591a8907c467e31cc4",
+  "source_clip": "lana_react_composed.t2.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "composed.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "952488ed9bf429c6cb7484cf5236beac1d5d38a46451ca5edf7b67945685e360",
+  "source_clip": "lana_react_composed.t3.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "light_pleasure.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "54f64a1b98947bd8e673486980914bb2b8f2d60a297196ba121cfc1281811b5e",
+  "source_clip": "lana_react_light_pleasure.t0.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "light_pleasure.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "6d73e005f6a871bffea6f20cc5a76ffbd985d1dd39e2dc455b418d6f67df74eb",
+  "source_clip": "lana_react_light_pleasure.t1.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "light_pleasure.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "5f636a134607ec42f672d304355cee2c4e32919a57aeaf3f94f571ab0c613a21",
+  "source_clip": "lana_react_light_pleasure.t2.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "light_pleasure.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "df0ccb36e7e843ea860393d8577dd75a778a3b6b8a8e5ab73eb19739cd4eae7d",
+  "source_clip": "lana_react_light_pleasure.t3.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "near_orgasm.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "a793af6c7c6f5bdad7608cce84152eb8c76e8a13171623b077870ad42b9a3886",
+  "source_clip": "lana_react_near_orgasm.t0.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "near_orgasm.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "1df1d8617aa2846141a9f769bdaa3c5feacbf9e2b2a2f2927f3f9a21844d47e5",
+  "source_clip": "lana_react_near_orgasm.t1.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "near_orgasm.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "9848533b5b626d7012256cc2bb86bcc62fd64643e0fb41ab56861b2a9991fa11",
+  "source_clip": "lana_react_near_orgasm.t2.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "near_orgasm.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 96,
+  "freeze_sha256": "5f8250e562b549fcf219156ad807130f50638abf85f360ad52ebd3c8256a132e",
+  "source_clip": "lana_react_near_orgasm.t3.clip.json",
+  "strip_px": [
+   2880,
+   3840
+  ]
+ },
+ "orgasm.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "0cb1642672a4c5a99cbea7c9745d0d0777d91b16fc5de3d202253c17bcf7afe4",
+  "source_clip": "lana_react_orgasm.t0.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "orgasm.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "399f32769b7dee7959271a1a869ee31ea381fc098ff24b088f687a55e10bb4c1",
+  "source_clip": "lana_react_orgasm.t1.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "orgasm.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "04052d59b38623e269dc473d33bfb649d49c3d843dc731393a444cc942853cef",
+  "source_clip": "lana_react_orgasm.t2.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "orgasm.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "47701985b925bbac1e64beaef5b7ee064de7abbda19d3b269f3dac80ffd151a6",
+  "source_clip": "lana_react_orgasm.t3.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "overstimulation.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "947fb168b8587429a5f2365124a520eb65afd2d8ccc5993cb67f3d6065bc8a2d",
+  "source_clip": "lana_react_overstimulation.t0.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "overstimulation.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "fb08839661c11569b6a1cc40571d3cd4d05e6693aa99ec7f1aa770ef295d64bf",
+  "source_clip": "lana_react_overstimulation.t1.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "overstimulation.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "3d77fd44a0a2fc9d9e602d1558acb0873c4c0246a2c48330cb15314fd4ec7dc9",
+  "source_clip": "lana_react_overstimulation.t2.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "overstimulation.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 72,
+  "freeze_sha256": "7ce24c598a46bf4a2b2d3df07bbf291facb59f8589165ff5f13d3bede7db13a8",
+  "source_clip": "lana_react_overstimulation.t3.clip.json",
+  "strip_px": [
+   2880,
+   2880
+  ]
+ },
+ "squirt_event.t0": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "2d8ad67b4d133f00dd19d4d16377b75e65244de7a2c69e3c5fb7c337e5493c21",
+  "source_clip": "lana_react_squirt_event.t0.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "squirt_event.t1": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "d919a7ab2219f4d8853f1e2ba51ad907c9eaf1016b4de1d8393ead55e34960e0",
+  "source_clip": "lana_react_squirt_event.t1.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "squirt_event.t2": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "c84b4696cb8bc5b6c2e88c77a5a5c66de68e57ad14d30315249096520711d064",
+  "source_clip": "lana_react_squirt_event.t2.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ },
+ "squirt_event.t3": {
+  "cell": [
+   240,
+   480
+  ],
+  "cols": 12,
+  "frames": 120,
+  "freeze_sha256": "9a4554fbaefe9e5a2a025e00369d050e143519889ec8c70c5d0c9fbe047f29b5",
+  "source_clip": "lana_react_squirt_event.t3.clip.json",
+  "strip_px": [
+   2880,
+   4800
+  ]
+ }
+}

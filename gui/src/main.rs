@@ -25,6 +25,7 @@
 #![deny(unsafe_code)]
 
 mod catalogue;
+mod clips;
 mod drag;
 mod features;
 mod guide;
@@ -57,6 +58,7 @@ struct AppState {
     selected: Option<usize>,
     trial: Trial,
     clips: ClipRegistry,
+    player: clips::Player,
     drag: drag::Drag,
 }
 
@@ -235,12 +237,23 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
     };
     window.set_lana_strip_idx(strip);
     window.set_lana_frame((state.trial.tick_count % 12) as i32);
+    let playing_key = state.clips.lookup(&frame);
     let body = frame.body;
-    let x = body.tremble_wave as f32 * body.tremble_amp as f32 / 1000.0 * 0.004
-        - body.recoil as f32 * 0.008;
-    let y = body.breath_wave as f32 * body.breath_depth as f32 / 1000.0 * 0.004
-        - body.settle as f32 * 0.004
-        - body.arch as f32 * 0.002;
+    // When a recorded clip covers this state, the clip carries her
+    // motion and the procedural offsets (breath bob, tremble shimmy,
+    // recoil/settle shifts) stand down — the two never fight. The
+    // offsets remain the fallback for any state without a clip.
+    let (x, y) = if playing_key.is_some() {
+        (0.0, 0.0)
+    } else {
+        (
+            body.tremble_wave as f32 * body.tremble_amp as f32 / 1000.0 * 0.004
+                - body.recoil as f32 * 0.008,
+            body.breath_wave as f32 * body.breath_depth as f32 / 1000.0 * 0.004
+                - body.settle as f32 * 0.004
+                - body.arch as f32 * 0.002,
+        )
+    };
     window.set_lana_x(x);
     window.set_lana_y(y);
     window.set_lana_band(frame.band.label().into());
@@ -273,10 +286,10 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
         )
         .into(),
     );
-    let clip_status = match state.clips.lookup(&frame) {
+    let clip_status = match &playing_key {
         Some(key) => format!("Playing her recorded reaction clip: {key}"),
         None => format!(
-            "Her reactions are improvised live for now — recorded clips ({}) arrive with the animation update.",
+            "No recorded clip for this state ({}) — she holds her still figure.",
             frame.clip_key
         ),
     };
@@ -499,6 +512,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("lexicon coverage gaps: {}", gaps.join("; ")).into());
         }
     }
+    let mut clip_registry = ClipRegistry::new();
+    clips::register_all(&mut clip_registry);
     let state = Rc::new(RefCell::new(AppState {
         devices: devices.clone(),
         features,
@@ -507,7 +522,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         entries,
         selected: None,
         trial: Trial::new(),
-        clips: ClipRegistry::new(),
+        clips: clip_registry,
+        player: clips::Player::new(),
         drag: drag::Drag::default(),
     }));
 
@@ -597,6 +613,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         window.on_trial_clear(move || {
             state.borrow_mut().trial.clear_toys();
+            // STOP is one action: the drives zero and her playback
+            // hard-cuts to the idle loop in the same action.
+            state.borrow_mut().player.stop();
             if let Some(window) = weak.upgrade() {
                 window.set_trial_note("".into());
                 let state = state.borrow();
@@ -815,6 +834,49 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 state.borrow_mut().trial.tick();
                 if let Some(window) = weak.upgrade() {
                     sync_lana(&window, &state.borrow());
+                }
+            },
+        );
+    }
+
+    // --- recorded-clip playback: her figure advances at the clips'
+    // authored 24 fps. Selection follows the reaction state through
+    // the registry; the player applies the loop-boundary transition
+    // law (see clips.rs). Only a changed (clip, frame) is pushed to
+    // the window.
+    let play_timer = slint::Timer::default();
+    {
+        let state = state.clone();
+        let weak = window.as_weak();
+        let last = Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        let shown = Rc::new(std::cell::Cell::new(None::<(&'static str, u32)>));
+        play_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(33),
+            move || {
+                let now = std::time::Instant::now();
+                let dt = now.duration_since(last.get()).as_secs_f64().min(0.1);
+                last.set(now);
+                let mut state = state.borrow_mut();
+                let frame = reaction::reaction_frame(&state.trial);
+                if let Some(key) = state.clips.lookup(&frame)
+                    && let Some(clip) = clips::asset_for(&key)
+                {
+                    state.player.desire(clip);
+                }
+                state.player.advance(dt);
+                let clip = state.player.current();
+                let frame_idx = state.player.frame();
+                if shown.get() == Some((clip.key, frame_idx)) {
+                    return;
+                }
+                shown.set(Some((clip.key, frame_idx)));
+                if let Some(window) = weak.upgrade() {
+                    window.set_lana_clip_source(clips::strip_image(&window, clip));
+                    let (cx, cy) = clips::cell_offset(clip, frame_idx);
+                    window.set_lana_clip_x(cx as i32);
+                    window.set_lana_clip_y(cy as i32);
+                    window.set_lana_playing(true);
                 }
             },
         );

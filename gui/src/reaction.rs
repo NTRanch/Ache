@@ -15,13 +15,13 @@
 //! - a named **body-reaction parameter set** (breath, tremble, arch,
 //!   tense, recoil, settle) the clips also target.
 //!
-//! Tonight the GUI renders PROCEDURAL placeholder reactions through
-//! this interface (full-body figure-strip frames + offsets driven by these
-//! parameters), honestly labelled as placeholders. When
-//! torogao-motion-clip/2 reaction clips for Lana land, the trial
-//! registers their keys in [`ClipRegistry`] and plays the clip
-//! matching the current band+tier instead of the fallback — the
-//! lookup is here, tested, and needs no UI rework.
+//! The GUI plays the recorded torogao-motion-clip/2 reaction clips
+//! for Lana — all 32 band x tier clips, registered in
+//! [`ClipRegistry`] at startup by [`crate::clips`] and rendered off
+//! her rung-1 rig — matching the current band+tier. The procedural
+//! figure-strip frames + offsets this interface also computes remain
+//! as the fallback for any state a clip does not cover, and the
+//! parameter surface still drives the details readout.
 //!
 //! Determinism: every value is a pure function of the trial state
 //! and its tick count. Oscillation (breath, tremble) is a triangle
@@ -79,6 +79,19 @@ impl Band {
             Band::Afterglow => "Afterglow",
         }
     }
+
+    /// All bands, in taxonomy order — the rows of the clip key
+    /// space (band x tier 0-3).
+    pub const ALL: [Band; 8] = [
+        Band::Composed,
+        Band::LightPleasure,
+        Band::Building,
+        Band::NearOrgasm,
+        Band::Orgasm,
+        Band::SquirtEvent,
+        Band::Overstimulation,
+        Band::Afterglow,
+    ];
 }
 
 /// The toon layer's 13 expression parameters, per-mille. Field names
@@ -130,9 +143,9 @@ pub struct ReactionFrame {
     pub clip_key: String,
 }
 
-/// Registered reaction clips (torogao-motion-clip/2 keys). Empty
-/// tonight: the procedural fallback renders. The animation lane's
-/// clips register here when they land.
+/// Registered reaction clips (torogao-motion-clip/2 keys). Startup
+/// registers every landed clip (see `clips::register_all`); a state
+/// whose key is not registered falls back to the procedural figure.
 #[derive(Clone, Debug, Default)]
 pub struct ClipRegistry {
     keys: Vec<String>,
@@ -143,10 +156,7 @@ impl ClipRegistry {
         ClipRegistry { keys: Vec::new() }
     }
 
-    /// Registers a landed clip's key. Called by the clip-loading
-    /// path when the animation lane's clips ship; tonight the
-    /// registry is empty by design and the tests exercise this.
-    #[allow(dead_code)]
+    /// Registers a landed clip's key.
     pub fn register(&mut self, key: &str) {
         if !self.keys.iter().any(|k| k == key) {
             self.keys.push(key.to_string());

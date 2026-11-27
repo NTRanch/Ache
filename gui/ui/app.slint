@@ -102,6 +102,42 @@ export global Assets {
     out property <image> lana-waiting: @image-url("../assets/lana/waiting.png");
     out property <image> lana-success: @image-url("../assets/lana/success.png");
     out property <image> lana-error: @image-url("../assets/lana/error.png");
+    // Her recorded reaction clips: grid strips (12 cells of 240x480
+    // per row) rendered off her rung-1 rig from the frozen
+    // torogao-motion-clip/2 set by tools/make_lana_clips.py;
+    // provenance in assets/lana/clips/manifest.json.
+    out property <image> lana-clip-composed-t0: @image-url("../assets/lana/clips/composed.t0.png");
+    out property <image> lana-clip-composed-t1: @image-url("../assets/lana/clips/composed.t1.png");
+    out property <image> lana-clip-composed-t2: @image-url("../assets/lana/clips/composed.t2.png");
+    out property <image> lana-clip-composed-t3: @image-url("../assets/lana/clips/composed.t3.png");
+    out property <image> lana-clip-light-pleasure-t0: @image-url("../assets/lana/clips/light_pleasure.t0.png");
+    out property <image> lana-clip-light-pleasure-t1: @image-url("../assets/lana/clips/light_pleasure.t1.png");
+    out property <image> lana-clip-light-pleasure-t2: @image-url("../assets/lana/clips/light_pleasure.t2.png");
+    out property <image> lana-clip-light-pleasure-t3: @image-url("../assets/lana/clips/light_pleasure.t3.png");
+    out property <image> lana-clip-building-t0: @image-url("../assets/lana/clips/building.t0.png");
+    out property <image> lana-clip-building-t1: @image-url("../assets/lana/clips/building.t1.png");
+    out property <image> lana-clip-building-t2: @image-url("../assets/lana/clips/building.t2.png");
+    out property <image> lana-clip-building-t3: @image-url("../assets/lana/clips/building.t3.png");
+    out property <image> lana-clip-near-orgasm-t0: @image-url("../assets/lana/clips/near_orgasm.t0.png");
+    out property <image> lana-clip-near-orgasm-t1: @image-url("../assets/lana/clips/near_orgasm.t1.png");
+    out property <image> lana-clip-near-orgasm-t2: @image-url("../assets/lana/clips/near_orgasm.t2.png");
+    out property <image> lana-clip-near-orgasm-t3: @image-url("../assets/lana/clips/near_orgasm.t3.png");
+    out property <image> lana-clip-orgasm-t0: @image-url("../assets/lana/clips/orgasm.t0.png");
+    out property <image> lana-clip-orgasm-t1: @image-url("../assets/lana/clips/orgasm.t1.png");
+    out property <image> lana-clip-orgasm-t2: @image-url("../assets/lana/clips/orgasm.t2.png");
+    out property <image> lana-clip-orgasm-t3: @image-url("../assets/lana/clips/orgasm.t3.png");
+    out property <image> lana-clip-squirt-event-t0: @image-url("../assets/lana/clips/squirt_event.t0.png");
+    out property <image> lana-clip-squirt-event-t1: @image-url("../assets/lana/clips/squirt_event.t1.png");
+    out property <image> lana-clip-squirt-event-t2: @image-url("../assets/lana/clips/squirt_event.t2.png");
+    out property <image> lana-clip-squirt-event-t3: @image-url("../assets/lana/clips/squirt_event.t3.png");
+    out property <image> lana-clip-overstimulation-t0: @image-url("../assets/lana/clips/overstimulation.t0.png");
+    out property <image> lana-clip-overstimulation-t1: @image-url("../assets/lana/clips/overstimulation.t1.png");
+    out property <image> lana-clip-overstimulation-t2: @image-url("../assets/lana/clips/overstimulation.t2.png");
+    out property <image> lana-clip-overstimulation-t3: @image-url("../assets/lana/clips/overstimulation.t3.png");
+    out property <image> lana-clip-afterglow-t0: @image-url("../assets/lana/clips/afterglow.t0.png");
+    out property <image> lana-clip-afterglow-t1: @image-url("../assets/lana/clips/afterglow.t1.png");
+    out property <image> lana-clip-afterglow-t2: @image-url("../assets/lana/clips/afterglow.t2.png");
+    out property <image> lana-clip-afterglow-t3: @image-url("../assets/lana/clips/afterglow.t3.png");
 }
 
 export struct DeviceRow {
@@ -544,6 +580,10 @@ export component MainWindow inherits Window {
     // --- Lana state (all values owned by the Rust trial engine) ---
     in property <int> lana-strip-idx: 0;
     in property <int> lana-frame: 0;
+    in property <image> lana-clip-source;
+    in property <int> lana-clip-x: 0;
+    in property <int> lana-clip-y: 0;
+    in property <bool> lana-playing: false;
     in property <length> lana-x: 0px;
     in property <length> lana-y: 0px;
     in property <string> lana-band: "Composed";
@@ -668,7 +708,11 @@ export component MainWindow inherits Window {
                     background: @radial-gradient(circle, #ec489955, #ec489900);
                     opacity: 0.25 + root.lana-arousal * 0.0075;
                 }
+                // The still-figure fallback: shown only until the
+                // recorded-clip player takes over (and for any state
+                // a clip does not cover).
                 Image {
+                    visible: !root.lana-playing;
                     source: root.lana-strip-idx == 0 ? Assets.lana-idle
                         : root.lana-strip-idx == 1 ? Assets.lana-guiding
                         : root.lana-strip-idx == 2 ? Assets.lana-waiting
@@ -678,6 +722,20 @@ export component MainWindow inherits Window {
                     source-clip-y: 0;
                     source-clip-width: 144;
                     source-clip-height: 288;
+                    width: 240px;
+                    height: 480px;
+                }
+                // Her recorded reaction clip, playing: one 240x480
+                // cell of the current clip's grid strip, advanced by
+                // the playback timer in Rust (clips.rs owns the
+                // selection and the loop-boundary transition law).
+                Image {
+                    visible: root.lana-playing;
+                    source: root.lana-clip-source;
+                    source-clip-x: root.lana-clip-x;
+                    source-clip-y: root.lana-clip-y;
+                    source-clip-width: 240;
+                    source-clip-height: 480;
                     width: 240px;
                     height: 480px;
                 }
@@ -738,7 +796,7 @@ export component MainWindow inherits Window {
             x: 20px;
             y: 788px;
             width: 340px;
-            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class). Grab her and pick her up — where you hold her changes how she hangs.";
+            text: "Lana — your guide and play partner. She plays recorded reaction clips rendered from her own rig (construction-class). Grab her and pick her up — where you hold her changes how she hangs.";
             color: Theme.faint;
             font-size: 10px;
             wrap: word-wrap;
