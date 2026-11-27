@@ -1,20 +1,15 @@
-// ache-gui Phase 1 UI: device catalogue browser + inert control preview.
+// ache-gui UI: device catalogue browser + Lana guide/trial + lexicon.
 //
 // Safety shape, by construction: the master switch exists only as a
-// rendered OFF switch in this phase. There is no property, callback, or
-// code path in this file that can enable a control or reach a device.
+// rendered OFF switch. There is no property, callback, or code path
+// in this file that can enable a control or reach a real device. The
+// Lana trial is a simulation over virtual devices (see src/trial.rs);
+// it constructs no provider and cannot reach ache's decide() gate.
 //
-// Theme (Owner ruling, 2026-11-27 01:07 PT): dark mode by default, with
-// a contrasting purple/pink accent pair to balance. Dark is forced in
-// code — both windows assign `Palette.color-scheme = ColorScheme.dark`
-// at init, which replaces the platform-preference binding for the whole
-// process; there is no light default and no theme toggle in this build.
-// All app-owned colours come from the `Theme` global below; the std
-// widgets (search field, tabs, switch, slider, buttons) render their
-// dark variants from the forced Palette scheme. Body text stays on the
-// neutral dark palette (foreground / muted / faint); purple and pink
-// are accents. Every text-bearing pair measures WCAG AA (>= 4.5:1) —
-// the ratios are recorded in the phase record (RECORD.md).
+// Theme (Owner ruling, 2026-11-27 01:07 PT): dark mode by default,
+// plum ground, purple/pink accent pair, forced in code via
+// Palette.color-scheme at init. All app-owned colours come from the
+// Theme global; body text pairs measure WCAG AA on this ground.
 
 import {
     AboutSlint,
@@ -22,23 +17,19 @@ import {
     LineEdit,
     ListView,
     Palette,
+    ScrollView,
     Slider,
     Switch,
     TabWidget,
 } from "std-widgets.slint";
 
-/// The app theme: a plum-dark ground, neutral text ramp, primary
-/// purple accent, secondary pink highlight. Chip colours sit on the
-/// violet → fuchsia → pink → rose arc, one per support bucket; the
-/// printed bucket label carries the distinction, the hue reinforces
-/// it. Link-state colours keep their semantic coding (green / red /
-/// amber), brightened for the dark ground.
 export global Theme {
     out property <color> background: #1e1930;
     out property <color> foreground: #f5f2fa;
     out property <color> muted: #b9aec9;
     out property <color> faint: #9a8bb0;
     out property <color> border: #453761;
+    out property <color> surface: #2a2140;
     out property <color> accent: #8b5cf6;
     out property <color> accent-bright: #c4b5fd;
     out property <color> accent-deep: #4c1d95;
@@ -54,9 +45,53 @@ export global Theme {
     out property <color> warn: #fbbf24;
 }
 
-/// One catalogue row, mirrored by `DeviceRow` construction in main.rs.
-/// `url` is empty exactly when `has-url` is false (IoST lists no link);
-/// the UI shows the absence instead of guessing a link.
+/// Estate-produced imagery: per-family form-factor stills and
+/// 12-frame turntable strips (Blender renders of estate-authored
+/// generic meshes — NOT product likenesses), plus Lana's estate
+/// helper-strip art (candidate-class; admission is the Owner's eye).
+export global Assets {
+    out property <image> egg: @image-url("../assets/families/egg.png");
+    out property <image> insertable: @image-url("../assets/families/insertable.png");
+    out property <image> rabbit: @image-url("../assets/families/rabbit.png");
+    out property <image> plug: @image-url("../assets/families/plug.png");
+    out property <image> panty: @image-url("../assets/families/panty.png");
+    out property <image> suction: @image-url("../assets/families/suction.png");
+    out property <image> butterfly: @image-url("../assets/families/butterfly.png");
+    out property <image> kegel: @image-url("../assets/families/kegel.png");
+    out property <image> bullet: @image-url("../assets/families/bullet.png");
+    out property <image> wand: @image-url("../assets/families/wand.png");
+    out property <image> clip: @image-url("../assets/families/clip.png");
+    out property <image> external: @image-url("../assets/families/external.png");
+    out property <image> rideon: @image-url("../assets/families/rideon.png");
+    out property <image> nipple: @image-url("../assets/families/nipple.png");
+    out property <image> beads: @image-url("../assets/families/beads.png");
+    out property <image> controller: @image-url("../assets/families/controller.png");
+    out property <image> other: @image-url("../assets/families/other.png");
+    out property <image> egg-spin: @image-url("../assets/spin/egg.png");
+    out property <image> insertable-spin: @image-url("../assets/spin/insertable.png");
+    out property <image> rabbit-spin: @image-url("../assets/spin/rabbit.png");
+    out property <image> plug-spin: @image-url("../assets/spin/plug.png");
+    out property <image> panty-spin: @image-url("../assets/spin/panty.png");
+    out property <image> suction-spin: @image-url("../assets/spin/suction.png");
+    out property <image> butterfly-spin: @image-url("../assets/spin/butterfly.png");
+    out property <image> kegel-spin: @image-url("../assets/spin/kegel.png");
+    out property <image> bullet-spin: @image-url("../assets/spin/bullet.png");
+    out property <image> wand-spin: @image-url("../assets/spin/wand.png");
+    out property <image> clip-spin: @image-url("../assets/spin/clip.png");
+    out property <image> external-spin: @image-url("../assets/spin/external.png");
+    out property <image> rideon-spin: @image-url("../assets/spin/rideon.png");
+    out property <image> nipple-spin: @image-url("../assets/spin/nipple.png");
+    out property <image> beads-spin: @image-url("../assets/spin/beads.png");
+    out property <image> controller-spin: @image-url("../assets/spin/controller.png");
+    out property <image> other-spin: @image-url("../assets/spin/other.png");
+    out property <image> lana-portrait: @image-url("../assets/lana/lana.png");
+    out property <image> lana-idle: @image-url("../assets/lana/idle.png");
+    out property <image> lana-guiding: @image-url("../assets/lana/guiding.png");
+    out property <image> lana-waiting: @image-url("../assets/lana/waiting.png");
+    out property <image> lana-success: @image-url("../assets/lana/success.png");
+    out property <image> lana-error: @image-url("../assets/lana/error.png");
+}
+
 export struct DeviceRow {
     brand: string,
     device: string,
@@ -66,17 +101,104 @@ export struct DeviceRow {
     link-state: string,
     url: string,
     has-url: bool,
+    family: string,
+    index: int,
+}
+
+export struct ChannelRow {
+    label: string,
+    level: int,
+    max: int,
+}
+
+export struct TrialToyRow {
+    toy-index: int,
+    name: string,
+    family: string,
+    pleasure: int,
+    force: int,
+    channels: [ChannelRow],
+    spark: image,
+}
+
+export struct LexiconRow {
+    title: string,
+    meta: string,
+}
+
+/// The still for a family (turntable frame 0).
+component FamilyStill inherits Image {
+    in property <string> family;
+    source: root.family == "egg" ? Assets.egg
+        : root.family == "insertable" ? Assets.insertable
+        : root.family == "rabbit" ? Assets.rabbit
+        : root.family == "plug" ? Assets.plug
+        : root.family == "panty" ? Assets.panty
+        : root.family == "suction" ? Assets.suction
+        : root.family == "butterfly" ? Assets.butterfly
+        : root.family == "kegel" ? Assets.kegel
+        : root.family == "bullet" ? Assets.bullet
+        : root.family == "wand" ? Assets.wand
+        : root.family == "clip" ? Assets.clip
+        : root.family == "external" ? Assets.external
+        : root.family == "rideon" ? Assets.rideon
+        : root.family == "nipple" ? Assets.nipple
+        : root.family == "beads" ? Assets.beads
+        : root.family == "controller" ? Assets.controller
+        : Assets.other;
+    image-fit: contain;
+}
+
+/// The turntable strip for a family, clipped to one 192px frame.
+component FamilySpin inherits Image {
+    in property <string> family;
+    in property <int> frame;
+    source: root.family == "egg" ? Assets.egg-spin
+        : root.family == "insertable" ? Assets.insertable-spin
+        : root.family == "rabbit" ? Assets.rabbit-spin
+        : root.family == "plug" ? Assets.plug-spin
+        : root.family == "panty" ? Assets.panty-spin
+        : root.family == "suction" ? Assets.suction-spin
+        : root.family == "butterfly" ? Assets.butterfly-spin
+        : root.family == "kegel" ? Assets.kegel-spin
+        : root.family == "bullet" ? Assets.bullet-spin
+        : root.family == "wand" ? Assets.wand-spin
+        : root.family == "clip" ? Assets.clip-spin
+        : root.family == "external" ? Assets.external-spin
+        : root.family == "rideon" ? Assets.rideon-spin
+        : root.family == "nipple" ? Assets.nipple-spin
+        : root.family == "beads" ? Assets.beads-spin
+        : root.family == "controller" ? Assets.controller-spin
+        : Assets.other-spin;
+    source-clip-x: root.frame * 192;
+    source-clip-y: 0;
+    source-clip-width: 192;
+    source-clip-height: 192;
+    image-fit: contain;
 }
 
 component CatalogueRow inherits Rectangle {
     in property <DeviceRow> data;
     callback open-url(string);
+    callback device-selected(int);
 
     height: 62px;
+
+    TouchArea {
+        clicked => {
+            root.device-selected(data.index);
+        }
+    }
 
     HorizontalLayout {
         padding: 6px;
         spacing: 10px;
+
+        FamilyStill {
+            width: 46px;
+            height: 46px;
+            family: data.family;
+        }
 
         Rectangle {
             width: 46px;
@@ -159,24 +281,110 @@ component CatalogueRow inherits Rectangle {
     }
 }
 
+/// A labelled horizontal meter, value in per-mille (may be negative
+/// for pleasure: the bar then shows in the warning colour, empty).
+component Meter inherits VerticalLayout {
+    in property <string> label;
+    in property <int> value;
+    in property <color> bar-color: Theme.accent;
+    spacing: 2px;
+    HorizontalLayout {
+        Text {
+            text: root.label;
+            color: Theme.muted;
+            font-size: 11px;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value + "‰";
+            color: Theme.foreground;
+            font-size: 11px;
+            font-weight: 700;
+        }
+    }
+    Rectangle {
+        height: 8px;
+        background: Theme.surface;
+        border-radius: 4px;
+        Rectangle {
+            x: 0px;
+            width: parent.width * max(root.value, 0) / 1000;
+            height: 8px;
+            background: root.bar-color;
+            border-radius: 4px;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "ache — device catalogue";
-    width: 1120px;
-    height: 780px;
+    width: 1280px;
+    height: 820px;
     background: Theme.background;
 
-    // Dark by default (Owner ruling, 2026-11-27): force the dark
-    // scheme at startup, independent of the OS preference. See the
-    // theme note at the top of this file.
     init => {
         Palette.color-scheme = ColorScheme.dark;
     }
 
+    in-out property <int> active-tab: 0;
     in property <[DeviceRow]> devices;
     in property <string> summary;
     callback search-changed(string);
     callback open-url(string);
     callback show-about();
+    callback device-selected(int);
+
+    // --- device detail / guide (shared by Catalogue and Lana tabs) ---
+    in property <bool> has-detail: false;
+    in property <string> detail-family: "other";
+    in property <string> detail-title: "";
+    in property <string> detail-what: "";
+    in property <string> detail-features: "";
+    in property <string> detail-kinks: "";
+    in property <string> detail-basis: "";
+    in property <int> spin-frame: 0;
+    callback add-selected-to-trial();
+
+    // --- Lana state (all values owned by the Rust trial engine) ---
+    in property <int> lana-strip-idx: 0;
+    in property <int> lana-frame: 0;
+    in property <length> lana-x: 0px;
+    in property <length> lana-y: 0px;
+    in property <string> lana-band: "Composed";
+    in property <string> lana-stage: "S0 Composed";
+    in property <int> lana-arousal: 0;
+    in property <string> lana-reaction: "";
+    in property <string> lana-events: "";
+    in property <string> lana-params: "";
+    in property <string> lana-clip: "";
+    in property <string> profile-name: "Lana (her own)";
+    in property <[float]> zone-values: [100.0, 100.0, 100.0, 100.0];
+    in property <string> profile-text: "";
+    in property <string> combo-text: "";
+    in property <string> trial-note: "";
+    in property <string> trial-count: "0 / 10 toys";
+    in property <int> zone-ext: 0;
+    in property <int> zone-int: 0;
+    in property <int> zone-anal: 0;
+    in property <int> zone-nip: 0;
+    in property <int> total-pleasure: 0;
+    in property <image> trace-image;
+    in property <[TrialToyRow]> trial-toys;
+    callback profile-selected(int);
+    callback zone-changed(int, float);
+    callback trial-remove(int);
+    callback channel-released(int, int, float);
+    callback trial-clear();
+
+    // --- lexicon ---
+    in property <[LexiconRow]> lexicon-rows;
+    in property <string> lexicon-title: "";
+    in property <string> lexicon-meta: "";
+    in property <string> lexicon-body: "";
+    in property <bool> lexicon-can-try: false;
+    callback lexicon-search(string);
+    callback lexicon-select(int);
+    callback lexicon-try();
 
     VerticalLayout {
         HorizontalLayout {
@@ -227,7 +435,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "device control is not wired in this build; every control is inert.";
+                    text: "device control is not wired in this build; every control is inert. Lana's trial is a simulation — virtual toys only.";
                     color: white;
                     font-weight: 700;
                     vertical-alignment: center;
@@ -242,13 +450,508 @@ export component MainWindow inherits Window {
 
         TabWidget {
             vertical-stretch: 1;
+            current-index <=> root.active-tab;
             Tab {
                 title: "Catalogue";
-                ListView {
-                    for device in root.devices: CatalogueRow {
-                        data: device;
-                        open-url(url) => {
-                            root.open-url(url);
+                HorizontalLayout {
+                    ListView {
+                        horizontal-stretch: 1;
+                        for device in root.devices: CatalogueRow {
+                            data: device;
+                            open-url(url) => {
+                                root.open-url(url);
+                            }
+                            device-selected(index) => {
+                                root.device-selected(index);
+                            }
+                        }
+                    }
+                    if root.has-detail: Rectangle {
+                        width: 372px;
+                        background: Theme.surface;
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            Text {
+                                text: root.detail-title;
+                                color: Theme.foreground;
+                                font-size: 15px;
+                                font-weight: 700;
+                                wrap: word-wrap;
+                            }
+                            FamilySpin {
+                                width: 192px;
+                                height: 192px;
+                                x: 84px;
+                                family: root.detail-family;
+                                frame: root.spin-frame;
+                            }
+                            Text {
+                                text: "True turntable — 12-frame estate render of the form factor (generic family mesh, not the product).";
+                                color: Theme.faint;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Text {
+                                        text: root.detail-what;
+                                        color: Theme.foreground;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: root.detail-features;
+                                        color: Theme.muted;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: root.detail-kinks;
+                                        color: Theme.muted;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: root.detail-basis;
+                                        color: Theme.faint;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: "Add to Lana's rig";
+                                    clicked => {
+                                        root.add-selected-to-trial();
+                                    }
+                                }
+                                Button {
+                                    text: "Ask Lana";
+                                    clicked => {
+                                        root.active-tab = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Tab {
+                title: "Lana — guide & trial";
+                HorizontalLayout {
+                    spacing: 0px;
+                    // ---- column A: Lana herself ----
+                    VerticalLayout {
+                        width: 308px;
+                        padding: 10px;
+                        spacing: 6px;
+                        alignment: start;
+                        Rectangle {
+                            width: 288px;
+                            height: 288px;
+                            clip: true;
+                            background: Theme.surface;
+                            Image {
+                                source: root.lana-strip-idx == 0 ? Assets.lana-idle
+                                    : root.lana-strip-idx == 1 ? Assets.lana-guiding
+                                    : root.lana-strip-idx == 2 ? Assets.lana-waiting
+                                    : root.lana-strip-idx == 3 ? Assets.lana-success
+                                    : Assets.lana-error;
+                                source-clip-x: root.lana-frame * 288;
+                                source-clip-y: 0;
+                                source-clip-width: 288;
+                                source-clip-height: 288;
+                                width: 288px;
+                                height: 288px;
+                                x: root.lana-x;
+                                y: root.lana-y;
+                            }
+                        }
+                        Text {
+                            text: "Lana — your guide. Art: estate helper strips (candidate-class). Motion: procedural placeholder via the reaction parameter surface — reaction clips land through the clip registry.";
+                            color: Theme.faint;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.lana-band + " · " + root.lana-stage;
+                            color: Theme.pink-bright;
+                            font-weight: 700;
+                        }
+                        Meter {
+                            label: "Arousal";
+                            value: root.lana-arousal;
+                            bar-color: Theme.pink;
+                        }
+                        Text {
+                            text: root.lana-events;
+                            color: Theme.muted;
+                            font-size: 12px;
+                        }
+                        Text {
+                            text: "“" + root.lana-reaction + "”";
+                            color: Theme.foreground;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.lana-params;
+                            color: Theme.faint;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.lana-clip;
+                            color: Theme.faint;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+                    // ---- column B: guide + sensitivity ----
+                    VerticalLayout {
+                        width: 348px;
+                        padding: 10px;
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "Lana explains";
+                            color: Theme.accent-bright;
+                            font-weight: 700;
+                            font-size: 14px;
+                        }
+                        Text {
+                            text: root.has-detail ? root.detail-title : "Select a device in the Catalogue and she'll walk you through it.";
+                            color: Theme.foreground;
+                            font-weight: 700;
+                            wrap: word-wrap;
+                        }
+                        ScrollView {
+                            height: 218px;
+                            VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: root.detail-what;
+                                    color: Theme.foreground;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: root.detail-features;
+                                    color: Theme.muted;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: root.detail-kinks;
+                                    color: Theme.muted;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                        Button {
+                            text: "Add selected device to the rig";
+                            clicked => {
+                                root.add-selected-to-trial();
+                            }
+                        }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border;
+                        }
+                        Text {
+                            text: "Sensitivity & zones — modelling real variation";
+                            color: Theme.accent-bright;
+                            font-weight: 700;
+                            font-size: 14px;
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Button {
+                                text: "Hyper";
+                                clicked => { root.profile-selected(0); }
+                            }
+                            Button {
+                                text: "Responsive";
+                                clicked => { root.profile-selected(1); }
+                            }
+                            Button {
+                                text: "Lana";
+                                clicked => { root.profile-selected(2); }
+                            }
+                            Button {
+                                text: "Slow-burn";
+                                clicked => { root.profile-selected(3); }
+                            }
+                            Button {
+                                text: "Light-touch";
+                                clicked => { root.profile-selected(4); }
+                            }
+                        }
+                        Text {
+                            text: "Profile: " + root.profile-name;
+                            color: Theme.foreground;
+                            font-size: 12px;
+                            font-weight: 700;
+                        }
+                        for zone[idx] in ["External (clitoral)", "Internal (vaginal)", "Anal", "Nipples"]: HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: zone;
+                                color: Theme.muted;
+                                font-size: 11px;
+                                width: 108px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 20;
+                                maximum: 200;
+                                value: root.zone-values[idx];
+                                horizontal-stretch: 1;
+                                released(value) => {
+                                    root.zone-changed(idx, value);
+                                }
+                            }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            Text {
+                                text: root.profile-text;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+                    // ---- column C: the rig + live feed ----
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        padding: 10px;
+                        spacing: 6px;
+                        alignment: start;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Trial rig — simulation, virtual toys only";
+                                color: Theme.accent-bright;
+                                font-weight: 700;
+                                font-size: 14px;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.trial-count;
+                                color: Theme.muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                text: "Clear";
+                                clicked => { root.trial-clear(); }
+                            }
+                        }
+                        if root.trial-note != "": Text {
+                            text: "Lana: “" + root.trial-note + "”";
+                            color: Theme.pink-bright;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.combo-text;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Meter {
+                                label: "Zone: external";
+                                value: root.zone-ext;
+                                width: 118px;
+                            }
+                            Meter {
+                                label: "Zone: internal";
+                                value: root.zone-int;
+                                width: 118px;
+                            }
+                            Meter {
+                                label: "Zone: anal";
+                                value: root.zone-anal;
+                                width: 118px;
+                            }
+                            Meter {
+                                label: "Zone: nipples";
+                                value: root.zone-nip;
+                                width: 118px;
+                            }
+                            Meter {
+                                label: "Total pleasure";
+                                value: root.total-pleasure;
+                                bar-color: Theme.pink;
+                                width: 118px;
+                            }
+                        }
+                        Image {
+                            source: root.trace-image;
+                            width: 600px;
+                            height: 96px;
+                            image-fit: fill;
+                        }
+                        Text {
+                            text: "Live trace — last 30 s: one pleasure line per toy (pink shades), force in violet, arousal in white.";
+                            color: Theme.faint;
+                            font-size: 10px;
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                for toy in root.trial-toys: VerticalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: toy.name;
+                                            color: Theme.foreground;
+                                            font-weight: 700;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        Button {
+                                            text: "Remove";
+                                            clicked => { root.trial-remove(toy.toy-index); }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        Meter {
+                                            label: "Pleasure (effect on her)";
+                                            value: toy.pleasure;
+                                            bar-color: Theme.pink;
+                                            width: 220px;
+                                        }
+                                        Meter {
+                                            label: "Force / pressure";
+                                            value: toy.force;
+                                            width: 220px;
+                                        }
+                                    }
+                                    for channel[ci] in toy.channels: HorizontalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: channel.label;
+                                            color: Theme.muted;
+                                            font-size: 11px;
+                                            width: 170px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                        Slider {
+                                            minimum: 0;
+                                            maximum: channel.max;
+                                            value: channel.level;
+                                            width: 240px;
+                                            released(value) => {
+                                                root.channel-released(toy.toy-index, ci, value);
+                                            }
+                                        }
+                                        Text {
+                                            text: channel.level + " / " + channel.max;
+                                            color: Theme.foreground;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Tab {
+                title: "Lexicon";
+                HorizontalLayout {
+                    spacing: 0px;
+                    VerticalLayout {
+                        width: 380px;
+                        padding: 10px;
+                        spacing: 8px;
+                        LineEdit {
+                            placeholder-text: "Search the lexicon…";
+                            edited(text) => {
+                                root.lexicon-search(text);
+                            }
+                        }
+                        ListView {
+                            vertical-stretch: 1;
+                            for entry[idx] in root.lexicon-rows: Rectangle {
+                                height: 44px;
+                                TouchArea {
+                                    clicked => {
+                                        root.lexicon-select(idx);
+                                    }
+                                }
+                                VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 1px;
+                                    Text {
+                                        text: entry.title;
+                                        color: Theme.foreground;
+                                        font-weight: 700;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: entry.meta;
+                                        color: Theme.faint;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        padding: 14px;
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: root.lexicon-title;
+                            color: Theme.foreground;
+                            font-size: 17px;
+                            font-weight: 700;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.lexicon-meta;
+                            color: Theme.faint;
+                            font-size: 12px;
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            Text {
+                                text: root.lexicon-body;
+                                color: Theme.foreground;
+                                wrap: word-wrap;
+                            }
+                        }
+                        if root.lexicon-can-try: Button {
+                            text: "Try it on Lana — preload this in the trial rig";
+                            clicked => {
+                                root.lexicon-try();
+                                root.active-tab = 1;
+                            }
                         }
                     }
                 }
@@ -331,7 +1034,6 @@ export component AboutDialog inherits Window {
     height: 430px;
     background: Theme.background;
 
-    // Same forced dark scheme as the main window (see MainWindow).
     init => {
         Palette.color-scheme = ColorScheme.dark;
     }
@@ -346,7 +1048,7 @@ export component AboutDialog inherits Window {
             font-weight: 700;
         }
         Text {
-            text: "Unified haptics MCP — device catalogue browser (GUI phase 1).";
+            text: "Unified haptics MCP — device catalogue browser, Lana guide & trial, and lexicon.";
             color: Theme.muted;
             wrap: word-wrap;
         }
