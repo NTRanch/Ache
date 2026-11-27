@@ -1,0 +1,284 @@
+// ache-gui Phase 1 UI: device catalogue browser + inert control preview.
+//
+// Safety shape, by construction: the master switch exists only as a
+// rendered OFF switch in this phase. There is no property, callback, or
+// code path in this file that can enable a control or reach a device.
+
+import {
+    AboutSlint,
+    Button,
+    LineEdit,
+    ListView,
+    Slider,
+    Switch,
+    TabWidget,
+} from "std-widgets.slint";
+
+/// One catalogue row, mirrored by `DeviceRow` construction in main.rs.
+/// `url` is empty exactly when `has-url` is false (IoST lists no link);
+/// the UI shows the absence instead of guessing a link.
+export struct DeviceRow {
+    brand: string,
+    device: string,
+    device-type: string,
+    bucket: string,
+    untested: bool,
+    link-state: string,
+    url: string,
+    has-url: bool,
+}
+
+component CatalogueRow inherits Rectangle {
+    in property <DeviceRow> data;
+    callback open-url(string);
+
+    height: 62px;
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 10px;
+
+        Rectangle {
+            width: 46px;
+            height: 24px;
+            y: 4px;
+            border-radius: 4px;
+            background: data.bucket == "A" ? #166534
+                : data.bucket == "A-g" ? #3f6212
+                : data.bucket == "B" ? #a16207
+                : #991b1b;
+            Text {
+                text: data.bucket;
+                color: white;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: data.brand + " — " + data.device;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+                Text {
+                    text: data.device-type;
+                    color: #666666;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if data.untested: Text {
+                    text: "untested upstream";
+                    color: #a16207;
+                    font-size: 11px;
+                }
+                Text {
+                    text: data.link-state;
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: data.link-state == "EN" ? #166534
+                        : data.link-state == "DEAD" ? #991b1b
+                        : data.link-state == "NON-EN" ? #a16207
+                        : #666666;
+                }
+            }
+            if data.has-url: TouchArea {
+                height: 18px;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-url(data.url);
+                }
+                Text {
+                    x: 0px;
+                    width: parent.width;
+                    text: data.url;
+                    color: #1d4ed8;
+                    font-size: 12px;
+                    horizontal-alignment: left;
+                    overflow: elide;
+                }
+            }
+            if !data.has-url: Text {
+                text: "no link listed in IoST";
+                color: #888888;
+                font-size: 12px;
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: #dddddd;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "ache — device catalogue";
+    width: 1120px;
+    height: 780px;
+
+    in property <[DeviceRow]> devices;
+    in property <string> summary;
+    callback search-changed(string);
+    callback open-url(string);
+    callback show-about();
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+            Text {
+                text: "ache device catalogue";
+                font-size: 20px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            LineEdit {
+                placeholder-text: "Search brand, device, or type…";
+                horizontal-stretch: 1;
+                edited(text) => {
+                    root.search-changed(text);
+                }
+            }
+            Button {
+                text: "About";
+                clicked => {
+                    root.show-about();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-bottom: 6px;
+            Text {
+                text: root.summary;
+                color: #444444;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle {
+            height: 30px;
+            background: #7f1d1d;
+            Text {
+                text: "MASTER OFF — device control is not wired in this build; every control is inert.";
+                color: white;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        TabWidget {
+            vertical-stretch: 1;
+            Tab {
+                title: "Catalogue";
+                ListView {
+                    for device in root.devices: CatalogueRow {
+                        data: device;
+                        open-url(url) => {
+                            root.open-url(url);
+                        }
+                    }
+                }
+            }
+            Tab {
+                title: "Control (preview)";
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: "Control preview — rendering proof only. No device connection exists in this build, and none can be made from this pane.";
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Text {
+                            text: "Master";
+                            vertical-alignment: center;
+                        }
+                        Switch {
+                            checked: false;
+                            enabled: false;
+                        }
+                        Text {
+                            text: "OFF";
+                            color: #991b1b;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Text {
+                            text: "Intensity";
+                            vertical-alignment: center;
+                        }
+                        Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: 0;
+                            enabled: false;
+                            width: 280px;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Button {
+                            text: "Start pattern";
+                            enabled: false;
+                        }
+                        Button {
+                            text: "STOP";
+                            enabled: false;
+                        }
+                    }
+                    Text {
+                        text: "While the master switch is off, every control stays inert — including STOP, which is on screen from the first frame. Device wiring lands in a later phase and reaches devices only through ache's decide() gate and tool surface.";
+                        wrap: word-wrap;
+                        color: #555555;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// About dialog. Displaying the `AboutSlint` widget here, in a dialog
+/// reachable from the window's top level, is condition (a) of the Slint
+/// Royalty-free License attribution requirement (see README.md).
+export component AboutDialog inherits Window {
+    title: "About ache";
+    width: 440px;
+    height: 430px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text {
+            text: "ache";
+            font-size: 22px;
+            font-weight: 700;
+        }
+        Text {
+            text: "Unified haptics MCP — device catalogue browser (GUI phase 1).";
+            wrap: word-wrap;
+        }
+        Text {
+            text: "ache's own code is licensed under the Apache License 2.0. This application is built with the Slint toolkit under the Slint Royalty-free Desktop, Mobile, and Web Applications License; the required attribution follows.";
+            wrap: word-wrap;
+        }
+        AboutSlint { }
+    }
+}

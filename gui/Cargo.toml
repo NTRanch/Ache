@@ -1,0 +1,15 @@
+[package]
+name = "ache-gui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "ache desktop GUI: a Slint shell over ache's shared runtime. Phase 1 is the device catalogue browser plus an inert control-preview pane."
+
+# Slint is used under the Slint Royalty-free Desktop, Mobile, and Web
+# Applications License v2.0 (see README.md, "Licensing"). The pin is exact
+# and matches the estate-wide Slint pin (1.19.1).
+[dependencies]
+slint = "=1.19.1"
+
+[build-dependencies]
+slint-build = "=1.19.1"
