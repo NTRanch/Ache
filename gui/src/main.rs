@@ -162,7 +162,7 @@ fn sync_trial_model(window: &MainWindow, state: &AppState) {
         .iter()
         .enumerate()
         .map(|(index, toy)| {
-            let card_height = 96 + 30 * toy.channels.len() as i32;
+            let card_height = 120 + 30 * toy.channels.len() as i32;
             let this_y = y_offset;
             y_offset += card_height + 8;
             TrialToyRow {

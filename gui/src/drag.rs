@@ -35,24 +35,26 @@
 //! 0.65 lands at ~117, inverted-ish but never fully upside down).
 
 /// Figure display size (px) and its rest position in panel coords.
-/// Mirrors the layout constants in `ui/app.slint` (column A panel is
-/// 288x360; the figure rests at x=54, y=0).
-pub const FIG_W: f32 = 180.0;
-pub const FIG_H: f32 = 360.0;
-pub const REST_X: f32 = 54.0;
-pub const REST_Y: f32 = 0.0;
+/// Mirrors the layout constants in `ui/app.slint` (the room layout:
+/// she floats center-stage in the 1280x820 window; the figure rests
+/// at x=520, y=170).
+pub const FIG_W: f32 = 240.0;
+pub const FIG_H: f32 = 480.0;
+pub const REST_X: f32 = 520.0;
+pub const REST_Y: f32 = 170.0;
 
 /// The figure's approximate centre of mass in figure-local px,
 /// estimated from the masters' standing proportions (just below the
 /// waist). Only used to derive the hang tilt in [`Drag::begin`].
-pub const COM: (f32, f32) = (90.0, 187.0);
+pub const COM: (f32, f32) = (120.0, 249.3);
 
-/// Pointer travel is clamped to the panel plus a margin, so she can
-/// be carried a little past her column but never lost off-window.
-const POINTER_MIN_X: f32 = -30.0;
-const POINTER_MAX_X: f32 = 318.0;
-const POINTER_MIN_Y: f32 = -10.0;
-const POINTER_MAX_Y: f32 = 370.0;
+/// Pointer travel is clamped to the window plus a margin, so she
+/// can be carried a little past the stage edge but never lost
+/// off-window.
+const POINTER_MIN_X: f32 = -60.0;
+const POINTER_MAX_X: f32 = 1340.0;
+const POINTER_MIN_Y: f32 = -20.0;
+const POINTER_MAX_Y: f32 = 860.0;
 
 /// Where on her body the grab landed. Derived from the grab point's
 /// normalized figure coordinates by [`region_at`]; the mapping is

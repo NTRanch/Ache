@@ -1,10 +1,23 @@
-// ache-gui UI: device catalogue browser + Lana guide/trial + lexicon.
+// ache-gui UI: Lana's room — a stage, a toy shelf, and a guidebook.
+//
+// Owner ruling 2026-11-27 06:13 PT: the wow layer still "basically
+// looks like vscode" — drop the IDE skeleton. There are no tabs, no
+// sidebar, no document panes. The window is her room: Lana floats
+// center-stage (grab her and pick her up — src/drag.rs owns the
+// transform), the catalogue is a shelf drawer that slides over the
+// stage, a device's detail is a card floating beside her, the trial
+// is the stage itself (her body is the display; the rig is a stack
+// of floating cards), and the lexicon is a book that opens over the
+// room. The wow layer's plain-words copy carries over verbatim
+// wherever the words still point at something real.
 //
 // Safety shape, by construction: the master switch exists only as a
-// rendered OFF switch. There is no property, callback, or code path
+// rendered OFF pill. There is no property, callback, or code path
 // in this file that can enable a control or reach a real device. The
 // Lana trial is a simulation over virtual devices (see src/trial.rs);
 // it constructs no provider and cannot reach ache's decide() gate.
+// STOP on the stage is the trial's clear — virtual toys only — and
+// it is on screen, reachable in one action, at all times.
 //
 // Theme (Owner ruling, 2026-11-27 01:07 PT): dark mode by default,
 // plum ground, purple/pink accent pair, forced in code via
@@ -20,7 +33,6 @@ import {
     ScrollView,
     Slider,
     Switch,
-    TabWidget,
 } from "std-widgets.slint";
 
 export global Theme {
@@ -180,107 +192,154 @@ component FamilySpin inherits Image {
     image-fit: contain;
 }
 
-component CatalogueRow inherits Rectangle {
+/// A floating card: the room's only container shape. Translucent
+/// plum, one rounded outline — never a panel in a grid.
+component FloatCard inherits Rectangle {
+    background: #2a2140f5;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+/// A pill-shaped navigation / action chip.
+component NavChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> active: false;
+    callback clicked();
+
+    width: chip-label.preferred-width + 26px;
+    height: 30px;
+    border-radius: 15px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: root.active ? Theme.accent-deep : Theme.surface;
+
+    chip-label := Text {
+        x: 13px;
+        height: 100%;
+        text: root.text;
+        color: root.active ? white : Theme.foreground;
+        font-size: 12px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// One device on the toy shelf: a card, not a table row.
+component ShelfCard inherits Rectangle {
     in property <DeviceRow> data;
     callback open-url(string);
     callback device-selected(int);
 
-    height: 62px;
-
-    TouchArea {
-        clicked => {
-            root.device-selected(data.index);
-        }
-    }
-
-    HorizontalLayout {
-        padding: 6px;
-        spacing: 10px;
-
-        FamilyStill {
-            width: 46px;
-            height: 46px;
-            family: data.family;
-        }
-
-        Rectangle {
-            width: 46px;
-            height: 24px;
-            y: 4px;
-            border-radius: 4px;
-            background: data.bucket == "A" ? Theme.chip-a
-                : data.bucket == "A-g" ? Theme.chip-a-g
-                : data.bucket == "B" ? Theme.chip-b
-                : Theme.chip-c;
-            Text {
-                text: data.bucket;
-                color: white;
-                font-size: 12px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        VerticalLayout {
-            spacing: 2px;
-            HorizontalLayout {
-                spacing: 8px;
-                Text {
-                    text: data.brand + " — " + data.device;
-                    color: Theme.foreground;
-                    font-weight: 700;
-                    overflow: elide;
-                }
-                Text {
-                    text: data.device-type;
-                    color: Theme.muted;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-                if data.untested: Text {
-                    text: "untested upstream";
-                    color: Theme.warn;
-                    font-size: 11px;
-                }
-                Text {
-                    text: data.link-state;
-                    font-size: 11px;
-                    font-weight: 700;
-                    color: data.link-state == "EN" ? Theme.state-en
-                        : data.link-state == "DEAD" ? Theme.state-dead
-                        : data.link-state == "NON-EN" ? Theme.warn
-                        : Theme.faint;
-                }
-            }
-            if data.has-url: TouchArea {
-                height: 18px;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.open-url(data.url);
-                }
-                Text {
-                    x: 0px;
-                    width: parent.width;
-                    text: data.url;
-                    color: Theme.link;
-                    font-size: 12px;
-                    horizontal-alignment: left;
-                    overflow: elide;
-                }
-            }
-            if !data.has-url: Text {
-                text: "no link listed in IoST";
-                color: Theme.faint;
-                font-size: 12px;
-            }
-        }
-    }
+    height: 74px;
 
     Rectangle {
-        y: parent.height - 1px;
-        height: 1px;
-        background: Theme.border;
+        x: 5px;
+        y: 4px;
+        width: parent.width - 10px;
+        height: 66px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: #352a52;
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.device-selected(data.index);
+            }
+        }
+
+        HorizontalLayout {
+            padding: 7px;
+            spacing: 10px;
+
+            FamilyStill {
+                width: 46px;
+                height: 46px;
+                family: data.family;
+            }
+
+            Rectangle {
+                width: 40px;
+                height: 22px;
+                y: 4px;
+                border-radius: 4px;
+                background: data.bucket == "A" ? Theme.chip-a
+                    : data.bucket == "A-g" ? Theme.chip-a-g
+                    : data.bucket == "B" ? Theme.chip-b
+                    : Theme.chip-c;
+                Text {
+                    text: data.bucket;
+                    color: white;
+                    font-size: 11px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: data.brand + " — " + data.device;
+                        color: Theme.foreground;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: data.device-type;
+                        color: Theme.muted;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    if data.untested: Text {
+                        text: "untested upstream";
+                        color: Theme.warn;
+                        font-size: 11px;
+                    }
+                    Text {
+                        text: data.link-state;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: data.link-state == "EN" ? Theme.state-en
+                            : data.link-state == "DEAD" ? Theme.state-dead
+                            : data.link-state == "NON-EN" ? Theme.warn
+                            : Theme.faint;
+                    }
+                }
+                if data.has-url: TouchArea {
+                    height: 18px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-url(data.url);
+                    }
+                    Text {
+                        x: 0px;
+                        width: parent.width;
+                        text: data.url;
+                        color: Theme.link;
+                        font-size: 12px;
+                        horizontal-alignment: left;
+                        overflow: elide;
+                    }
+                }
+                if !data.has-url: Text {
+                    text: "no link listed in IoST";
+                    color: Theme.faint;
+                    font-size: 12px;
+                }
+            }
+        }
     }
 }
 
@@ -319,22 +378,26 @@ component Meter inherits VerticalLayout {
     }
 }
 
-/// One toy on the trial rig: telemetry meters + per-channel sliders.
+/// One toy on the trial rig: a floating card with telemetry meters
+/// and per-channel sliders, stacked for the stage's right edge.
 /// Children are positioned absolutely — layout negotiation inside a
-/// repeated card proved unreliable in this Slint build.
+/// repeated card proved unreliable in this Slint build. Card height
+/// is computed in Rust (sync_trial_model): 120 + 30 per channel.
 component TrialToyCard inherits Rectangle {
     in property <TrialToyRow> data;
     callback trial-remove(int);
     callback channel-released(int, int, float);
 
     height: data.card-height * 1px;
-    background: Theme.surface;
-    border-radius: 6px;
+    background: #2a2140f5;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.border;
 
     Text {
-        x: 8px;
-        y: 6px;
-        width: parent.width - 100px;
+        x: 10px;
+        y: 7px;
+        width: parent.width - 102px;
         text: data.name;
         color: Theme.foreground;
         font-weight: 700;
@@ -348,24 +411,26 @@ component TrialToyCard inherits Rectangle {
         clicked => { root.trial-remove(data.toy-index); }
     }
     Text {
-        x: 8px;
-        y: 38px;
+        x: 10px;
+        y: 36px;
         text: "Pleasure — how it feels to her";
         color: Theme.muted;
         font-size: 11px;
     }
     Text {
-        x: 196px;
-        y: 38px;
+        x: parent.width - 52px;
+        y: 36px;
+        width: 42px;
         text: data.pleasure + "%";
         color: Theme.foreground;
         font-size: 11px;
         font-weight: 700;
+        horizontal-alignment: right;
     }
     Rectangle {
-        x: 8px;
-        y: 54px;
-        width: 212px;
+        x: 10px;
+        y: 52px;
+        width: parent.width - 20px;
         height: 8px;
         background: Theme.border;
         border-radius: 4px;
@@ -379,24 +444,26 @@ component TrialToyCard inherits Rectangle {
         }
     }
     Text {
-        x: 236px;
-        y: 38px;
+        x: 10px;
+        y: 68px;
         text: "Pressure — how firm it feels";
         color: Theme.muted;
         font-size: 11px;
     }
     Text {
-        x: 424px;
-        y: 38px;
+        x: parent.width - 52px;
+        y: 68px;
+        width: 42px;
         text: data.force + "%";
         color: Theme.foreground;
         font-size: 11px;
         font-weight: 700;
+        horizontal-alignment: right;
     }
     Rectangle {
-        x: 236px;
-        y: 54px;
-        width: 212px;
+        x: 10px;
+        y: 84px;
+        width: parent.width - 20px;
         height: 8px;
         background: Theme.border;
         border-radius: 4px;
@@ -411,22 +478,22 @@ component TrialToyCard inherits Rectangle {
     }
     for channel[ci] in data.channels: Rectangle {
         x: 0px;
-        y: (68 + ci * 30) * 1px;
+        y: (104 + ci * 30) * 1px;
         width: parent.width;
         height: 28px;
         Text {
-            x: 8px;
+            x: 10px;
             y: 5px;
-            width: 170px;
+            width: 104px;
             text: channel.label;
             color: Theme.muted;
             font-size: 11px;
             overflow: elide;
         }
         Slider {
-            x: 186px;
+            x: 120px;
             y: 2px;
-            width: 240px;
+            width: parent.width - 182px;
             minimum: 0;
             maximum: channel.max;
             value: channel.level;
@@ -435,11 +502,13 @@ component TrialToyCard inherits Rectangle {
             }
         }
         Text {
-            x: 436px;
+            x: parent.width - 56px;
             y: 5px;
+            width: 46px;
             text: channel.level + " / " + channel.max;
             color: Theme.foreground;
             font-size: 11px;
+            horizontal-alignment: right;
         }
     }
 }
@@ -454,7 +523,6 @@ export component MainWindow inherits Window {
         Palette.color-scheme = ColorScheme.dark;
     }
 
-    in-out property <int> active-tab: 0;
     in property <[DeviceRow]> devices;
     in property <string> summary;
     callback search-changed(string);
@@ -462,7 +530,7 @@ export component MainWindow inherits Window {
     callback show-about();
     callback device-selected(int);
 
-    // --- device detail / guide (shared by Catalogue and Lana tabs) ---
+    // --- device detail / guide (shared by the shelf and her card) ---
     in property <bool> has-detail: false;
     in property <string> detail-family: "other";
     in property <string> detail-title: "";
@@ -489,8 +557,8 @@ export component MainWindow inherits Window {
     in property <length> lana-drag-x: 0px;
     in property <length> lana-drag-y: 0px;
     in property <angle> lana-angle: 0deg;
-    in property <length> lana-origin-x: 90px;
-    in property <length> lana-origin-y: 180px;
+    in property <length> lana-origin-x: 120px;
+    in property <length> lana-origin-y: 240px;
     in property <bool> lana-held: false;
     out property <length> lana-mouse-x: lana-touch.mouse-x;
     out property <length> lana-mouse-y: lana-touch.mouse-y;
@@ -529,25 +597,443 @@ export component MainWindow inherits Window {
     callback lexicon-select(int);
     callback lexicon-try();
 
-    VerticalLayout {
-        HorizontalLayout {
-            padding: 10px;
-            spacing: 10px;
-            Text {
-                text: "ache · device research lab";
-                color: Theme.accent-bright;
-                font-size: 20px;
-                font-weight: 700;
-                vertical-alignment: center;
-            }
-            LineEdit {
-                placeholder-text: "Search brand, device, or type…";
-                horizontal-stretch: 1;
-                edited(text) => {
-                    root.search-changed(text);
+    // --- the room's overlays (hers; nothing here is a document) ---
+    in-out property <bool> shelf-open: false;
+    in-out property <bool> lexicon-open: false;
+    in-out property <bool> settings-open: false;
+    in-out property <bool> control-open: false;
+    in-out property <bool> detail-closed: false;
+
+    // ================= the stage =================
+    Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // Room light: two soft glows on the gradient, so the stage
+        // reads as a place, not a page.
+        Rectangle {
+            x: 260px;
+            y: 20px;
+            width: 760px;
+            height: 760px;
+            border-radius: 380px;
+            background: @radial-gradient(circle, #8b5cf614, #8b5cf600);
+        }
+        Rectangle {
+            x: 880px;
+            y: 420px;
+            width: 460px;
+            height: 460px;
+            border-radius: 230px;
+            background: @radial-gradient(circle, #ec489912, #ec489900);
+        }
+
+        // Her contact shadow — an ellipse on her spot, never a
+        // panel; it follows her across and thins while she's lifted.
+        Rectangle {
+            x: 550px + root.lana-x + root.lana-drag-x;
+            y: 646px;
+            width: 180px;
+            height: 20px;
+            border-radius: 10px;
+            background: @radial-gradient(circle, #00000059, #00000000);
+            opacity: root.lana-held ? 0.45 : 1.0;
+        }
+
+        // The figure cluster: halo, figure, zone glows. Only the
+        // visual child rotates about the grab point; the container
+        // — and the TouchArea on it — stays untransformed, so
+        // pointer coords are plain figure-local and the grab-point
+        // pin is exact at any hang angle (the drag lane's layout
+        // trap, carried over whole). Transform owned by drag.rs;
+        // geometry mirrors its constants (figure 240x480, rest at
+        // 520,170 on the stage).
+        lana-fig := Rectangle {
+            x: 520px + root.lana-x + root.lana-drag-x;
+            y: 170px + root.lana-y + root.lana-drag-y;
+            width: 240px;
+            height: 480px;
+            lana-visual := Rectangle {
+                width: 240px;
+                height: 480px;
+                transform-rotation: root.lana-angle;
+                transform-origin: { x: root.lana-origin-x, y: root.lana-origin-y };
+                // Her glow — the room answers her arousal.
+                Rectangle {
+                    x: -40px;
+                    y: 27px;
+                    width: 320px;
+                    height: 427px;
+                    border-radius: 160px;
+                    background: @radial-gradient(circle, #ec489955, #ec489900);
+                    opacity: 0.25 + root.lana-arousal * 0.0075;
+                }
+                Image {
+                    source: root.lana-strip-idx == 0 ? Assets.lana-idle
+                        : root.lana-strip-idx == 1 ? Assets.lana-guiding
+                        : root.lana-strip-idx == 2 ? Assets.lana-waiting
+                        : root.lana-strip-idx == 3 ? Assets.lana-success
+                        : Assets.lana-error;
+                    source-clip-x: root.lana-frame * 144;
+                    source-clip-y: 0;
+                    source-clip-width: 144;
+                    source-clip-height: 288;
+                    width: 240px;
+                    height: 480px;
+                }
+                // The zones being played, glowing on her body.
+                Rectangle {
+                    x: 56px;
+                    y: 131px;
+                    width: 128px;
+                    height: 59px;
+                    border-radius: 29px;
+                    background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
+                    opacity: root.zone-nip * 0.008;
+                }
+                Rectangle {
+                    x: 83px;
+                    y: 207px;
+                    width: 75px;
+                    height: 40px;
+                    border-radius: 20px;
+                    background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
+                    opacity: root.zone-ext * 0.008;
+                }
+                Rectangle {
+                    x: 93px;
+                    y: 232px;
+                    width: 69px;
+                    height: 37px;
+                    border-radius: 18px;
+                    background: @radial-gradient(circle, #f472b6aa, #ec489900);
+                    opacity: root.zone-int * 0.008;
+                }
+                Rectangle {
+                    x: 125px;
+                    y: 221px;
+                    width: 59px;
+                    height: 37px;
+                    border-radius: 18px;
+                    background: @radial-gradient(circle, #f472b6aa, #ec489900);
+                    opacity: root.zone-anal * 0.008;
                 }
             }
-            Button {
+            lana-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: root.lana-held ? MouseCursor.grabbing : MouseCursor.grab;
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down) {
+                        root.lana-grab(self.mouse-x, self.mouse-y);
+                    }
+                    if (ev.kind == PointerEventKind.up) {
+                        root.lana-release();
+                    }
+                }
+            }
+        }
+
+        Text {
+            x: 20px;
+            y: 788px;
+            width: 340px;
+            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class). Grab her and pick her up — where you hold her changes how she hangs.";
+            color: Theme.faint;
+            font-size: 10px;
+            wrap: word-wrap;
+        }
+
+        // ---- her voice: the conversational panel ----
+        FloatCard {
+            x: 20px;
+            y: 92px;
+            width: 320px;
+            height: 360px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                alignment: start;
+                Text {
+                    text: root.lana-band + (root.lana-stage == root.lana-band ? "" : " · " + root.lana-stage);
+                    color: Theme.pink-bright;
+                    font-weight: 700;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+                Meter {
+                    label: "Her arousal";
+                    value: root.lana-arousal;
+                    bar-color: Theme.pink;
+                }
+                Text {
+                    text: "“" + root.lana-reaction + "”";
+                    color: Theme.foreground;
+                    wrap: word-wrap;
+                }
+                if root.trial-note != "": Text {
+                    text: "Lana: “" + root.trial-note + "”";
+                    color: Theme.pink-bright;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.lana-events;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                if root.combo-text != "": Text {
+                    text: root.combo-text;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                if !root.has-detail && root.trial-toys.length == 0: Text {
+                    text: "Start here: open the toy shelf, pick a toy, add it to her rig, then raise its level gently and watch her.";
+                    color: Theme.foreground;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // The details toggle: a standing chip under her voice card.
+        Rectangle {
+            x: 32px;
+            y: 464px;
+            width: 220px;
+            height: 18px;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.show-details = !root.show-details;
+                }
+            }
+            Text {
+                text: (root.show-details ? "▾ " : "▸ ") + "Reading her closely — the details";
+                color: Theme.faint;
+                font-size: 11px;
+            }
+        }
+
+        // ---- the rig: floating toy cards on the stage's right ----
+        Text {
+            x: 936px;
+            y: 92px;
+            width: 200px;
+            text: "Play rig — virtual toys";
+            color: Theme.accent-bright;
+            font-weight: 700;
+            font-size: 14px;
+        }
+        if root.trial-toys.length > 0: Button {
+            x: 1092px;
+            y: 88px;
+            width: 28px;
+            text: "▲";
+            clicked => {
+                root.rig-scroll = max(0, root.rig-scroll - 134);
+            }
+        }
+        if root.trial-toys.length > 0: Button {
+            x: 1124px;
+            y: 88px;
+            width: 28px;
+            text: "▼";
+            clicked => {
+                root.rig-scroll = clamp(root.rig-scroll + 134, 0, max(0, root.rig-height - 618));
+            }
+        }
+        Text {
+            x: 1156px;
+            y: 94px;
+            width: 104px;
+            text: root.trial-count;
+            color: Theme.muted;
+            font-size: 12px;
+            horizontal-alignment: right;
+        }
+        if root.trial-toys.length == 0: Text {
+            x: 936px;
+            y: 122px;
+            width: 324px;
+            text: "Her rig is empty. Open the toy shelf and add something she'd like.";
+            color: Theme.faint;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        // NOTE: a `for` inside a ScrollView clips to the first row
+        // in this Slint build (verified by pixel measurement), so the
+        // rig stack scrolls manually: unclipped viewport + offset
+        // content + step buttons, as in the tabbed build.
+        Rectangle {
+            x: 936px;
+            y: 120px;
+            width: 324px;
+            height: 618px;
+            rig-view := Rectangle {
+                width: parent.width;
+                height: parent.height;
+                TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    scroll-event(event) => {
+                        root.rig-scroll = clamp(root.rig-scroll - event.delta-y / 1px, 0, max(0, root.rig-height - rig-view.height / 1px));
+                        return EventResult.accept;
+                    }
+                }
+                Rectangle {
+                    y: -root.rig-scroll * 1px;
+                    height: root.rig-height * 1px;
+                    for toy in root.trial-toys: TrialToyCard {
+                        y: toy.y-offset * 1px;
+                        width: parent.width;
+                        data: toy;
+                        trial-remove(index) => { root.trial-remove(index); }
+                        channel-released(toy-index, channel, value) => {
+                            root.channel-released(toy-index, channel, value);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- watch her: the zone meters, low on the stage ----
+        FloatCard {
+            x: 380px;
+            y: 700px;
+            width: 640px;
+            height: 100px;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text {
+                    text: "Watch her — the glow on her body shows where each toy is playing. These bars are just the details.";
+                    color: Theme.muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Meter {
+                        label: "Outside";
+                        value: root.zone-ext;
+                        width: 118px;
+                    }
+                    Meter {
+                        label: "Inside";
+                        value: root.zone-int;
+                        width: 118px;
+                    }
+                    Meter {
+                        label: "Anal";
+                        value: root.zone-anal;
+                        width: 118px;
+                    }
+                    Meter {
+                        label: "Nipples";
+                        value: root.zone-nip;
+                        width: 118px;
+                    }
+                    Meter {
+                        label: "All of her";
+                        value: root.total-pleasure;
+                        bar-color: Theme.pink;
+                        width: 118px;
+                    }
+                }
+            }
+        }
+
+        // ---- STOP: always on the stage, one action ----
+        Rectangle {
+            x: 1110px;
+            y: 752px;
+            width: 150px;
+            height: 48px;
+            border-radius: 24px;
+            background: Theme.chip-b;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.trial-clear();
+                }
+            }
+            Text {
+                text: "■ STOP — all off";
+                color: white;
+                font-weight: 700;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // ---- wordmark + the MASTER OFF pill (never covered) ----
+        Text {
+            x: 20px;
+            y: 14px;
+            text: "ache · device research lab";
+            color: Theme.accent-bright;
+            font-size: 20px;
+            font-weight: 700;
+        }
+        Rectangle {
+            x: 20px;
+            y: 48px;
+            width: 884px;
+            height: 26px;
+            border-radius: 13px;
+            background: Theme.accent-deep;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: center;
+                Text {
+                    text: "MASTER OFF — device control is not connected in this build, so nothing here can move a real device. Lana's session is a simulation — virtual toys only.";
+                    color: white;
+                    font-weight: 700;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ---- navigation chips ----
+        HorizontalLayout {
+            x: 690px;
+            y: 14px;
+            spacing: 8px;
+            NavChip {
+                text: "Toy shelf";
+                active: root.shelf-open;
+                clicked => {
+                    root.shelf-open = !root.shelf-open;
+                    root.lexicon-open = false;
+                }
+            }
+            NavChip {
+                text: "Guidebook";
+                active: root.lexicon-open;
+                clicked => {
+                    root.lexicon-open = !root.lexicon-open;
+                    root.shelf-open = false;
+                }
+            }
+            NavChip {
+                text: "How she likes it";
+                active: root.settings-open;
+                clicked => {
+                    root.settings-open = !root.settings-open;
+                }
+            }
+            NavChip {
+                text: "Control preview";
+                active: root.control-open;
+                clicked => {
+                    root.control-open = !root.control-open;
+                }
+            }
+            NavChip {
                 text: "About";
                 clicked => {
                     root.show-about();
@@ -555,15 +1041,289 @@ export component MainWindow inherits Window {
             }
         }
 
-        HorizontalLayout {
-            padding-left: 10px;
-            padding-bottom: 6px;
+        // ---- how she likes it: her preferences, as a card ----
+        if root.settings-open: FloatCard {
+            x: 20px;
+            y: 404px;
+            width: 344px;
             VerticalLayout {
-                spacing: 1px;
+                padding: 12px;
+                spacing: 6px;
+                alignment: start;
+                HorizontalLayout {
+                    Text {
+                        text: "How she likes it — sensitivity & zones";
+                        color: Theme.accent-bright;
+                        font-weight: 700;
+                        font-size: 14px;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+                    NavChip {
+                        text: "✕";
+                        clicked => {
+                            root.settings-open = false;
+                        }
+                    }
+                }
+                Text {
+                    text: "Her comfort, her pace — every body is different. These are her preferences; the sliders fine-tune them, zone by zone.";
+                    color: Theme.muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    Button {
+                        text: "Keen";
+                        clicked => { root.profile-selected(0); }
+                    }
+                    Button {
+                        text: "Responsive";
+                        clicked => { root.profile-selected(1); }
+                    }
+                    Button {
+                        text: "Lana's own";
+                        clicked => { root.profile-selected(2); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    Button {
+                        text: "Slow burn";
+                        clicked => { root.profile-selected(3); }
+                    }
+                    Button {
+                        text: "Gentle";
+                        clicked => { root.profile-selected(4); }
+                    }
+                }
+                Text {
+                    text: "Her settings: " + root.profile-name;
+                    color: Theme.foreground;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+                for zone[idx] in ["External (clitoral)", "Internal (vaginal)", "Anal", "Nipples"]: HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: zone;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        width: 108px;
+                        vertical-alignment: center;
+                    }
+                    Slider {
+                        minimum: 20;
+                        maximum: 200;
+                        value: root.zone-values[idx];
+                        horizontal-stretch: 1;
+                        released(value) => {
+                            root.zone-changed(idx, value);
+                        }
+                    }
+                }
+                ScrollView {
+                    height: 84px;
+                    VerticalLayout {
+                        alignment: start;
+                        Text {
+                            text: root.profile-text;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- reading her closely: the details, as an overlay ----
+        if root.show-details: FloatCard {
+            x: 288px;
+            y: 552px;
+            width: 648px;
+            height: 252px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                alignment: start;
+                HorizontalLayout {
+                    Text {
+                        text: "Reading her closely — the details";
+                        color: Theme.accent-bright;
+                        font-weight: 700;
+                        font-size: 13px;
+                        horizontal-stretch: 1;
+                    }
+                    NavChip {
+                        text: "✕";
+                        clicked => {
+                            root.show-details = false;
+                        }
+                    }
+                }
+                Text {
+                    text: root.lana-params;
+                    color: Theme.faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.lana-clip;
+                    color: Theme.faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                Image {
+                    source: root.trace-image;
+                    width: 600px;
+                    height: 96px;
+                    image-fit: fill;
+                }
+                Text {
+                    text: "The last 30 seconds, drawn live — a pink line per toy for how it feels to her, violet for pressure, white for her arousal.";
+                    color: Theme.faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // ---- the detail card: floats beside her ----
+        if root.has-detail && !root.detail-closed: FloatCard {
+            x: 916px;
+            y: 92px;
+            width: 344px;
+            height: 560px;
+            background: #2a2140;
+            NavChip {
+                x: parent.width - 44px;
+                y: 8px;
+                text: "✕";
+                clicked => {
+                    root.detail-closed = true;
+                }
+            }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: root.detail-title;
+                    color: Theme.foreground;
+                    font-size: 15px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Lana explains";
+                    color: Theme.accent-bright;
+                    font-weight: 700;
+                    font-size: 13px;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    FamilySpin {
+                        width: 192px;
+                        height: 192px;
+                        family: root.detail-family;
+                        frame: root.spin-frame;
+                    }
+                }
+                Text {
+                    text: "True turntable — 12-frame estate render of the form factor (generic family mesh, not the product).";
+                    color: Theme.faint;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                ScrollView {
+                    height: 148px;
+                    VerticalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: root.detail-what;
+                            color: Theme.foreground;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.detail-features;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.detail-kinks;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Text {
+                    text: root.detail-basis;
+                    color: Theme.faint;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "Add to Lana's rig";
+                        clicked => {
+                            root.add-selected-to-trial();
+                        }
+                    }
+                    Button {
+                        text: "Ask Lana";
+                        clicked => {
+                            root.shelf-open = false;
+                            root.lexicon-open = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- the toy shelf: a drawer over the stage ----
+        Rectangle {
+            x: root.shelf-open ? 0px : -452px;
+            y: 84px;
+            width: 452px;
+            height: 736px;
+            background: #241c3a;
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: Theme.border;
+            animate x { duration: 200ms; easing: ease-out; }
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "The toy shelf";
+                        color: Theme.accent-bright;
+                        font-size: 17px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    NavChip {
+                        text: "✕";
+                        clicked => {
+                            root.shelf-open = false;
+                        }
+                    }
+                }
                 Text {
                     text: root.summary;
                     color: Theme.muted;
                     font-size: 12px;
+                }
+                LineEdit {
+                    placeholder-text: "Search brand, device, or type…";
+                    edited(text) => {
+                        root.search-changed(text);
+                    }
                 }
                 Text {
                     text: "New here? Pick any toy, then choose Ask Lana — she explains it in plain words and sets up a play session. The letter chips say how well the maker data matched (A is best); EN means an English product page, NON-EN another language, DEAD a link that has gone, UNVERIFIED not yet checked.";
@@ -571,589 +1331,71 @@ export component MainWindow inherits Window {
                     font-size: 11px;
                     wrap: word-wrap;
                 }
+                ListView {
+                    vertical-stretch: 1;
+                    for device in root.devices: ShelfCard {
+                        data: device;
+                        open-url(url) => {
+                            root.open-url(url);
+                        }
+                        device-selected(index) => {
+                            root.detail-closed = false;
+                            root.device-selected(index);
+                        }
+                    }
+                }
             }
         }
 
+        // ---- the guidebook: the lexicon, opened over the room ----
         Rectangle {
-            height: 30px;
-            background: Theme.accent-deep;
-            HorizontalLayout {
-                alignment: center;
-                spacing: 0px;
-                Text {
-                    text: "MASTER OFF — ";
-                    color: Theme.pink-bright;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: "device control is not connected in this build, so nothing here can move a real device. Lana's session is a simulation — virtual toys only.";
-                    color: white;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        Rectangle {
-            height: 2px;
-            background: Theme.pink;
-        }
-
-        TabWidget {
-            vertical-stretch: 1;
-            current-index <=> root.active-tab;
-            Tab {
-                title: "Catalogue";
+            x: root.lexicon-open ? 660px : 1280px;
+            y: 84px;
+            width: 600px;
+            height: 720px;
+            background: #241c3a;
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: Theme.border;
+            animate x { duration: 200ms; easing: ease-out; }
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
                 HorizontalLayout {
-                    ListView {
+                    spacing: 8px;
+                    Text {
+                        text: "Guidebook — the lexicon";
+                        color: Theme.accent-bright;
+                        font-size: 17px;
+                        font-weight: 700;
+                        vertical-alignment: center;
                         horizontal-stretch: 1;
-                        for device in root.devices: CatalogueRow {
-                            data: device;
-                            open-url(url) => {
-                                root.open-url(url);
-                            }
-                            device-selected(index) => {
-                                root.device-selected(index);
-                            }
-                        }
                     }
-                    if root.has-detail: Rectangle {
-                        width: 372px;
-                        background: Theme.surface;
-                        VerticalLayout {
-                            padding: 12px;
-                            spacing: 8px;
-                            Text {
-                                text: root.detail-title;
-                                color: Theme.foreground;
-                                font-size: 15px;
-                                font-weight: 700;
-                                wrap: word-wrap;
-                            }
-                            FamilySpin {
-                                width: 192px;
-                                height: 192px;
-                                x: 84px;
-                                family: root.detail-family;
-                                frame: root.spin-frame;
-                            }
-                            Text {
-                                text: "True turntable — 12-frame estate render of the form factor (generic family mesh, not the product).";
-                                color: Theme.faint;
-                                font-size: 11px;
-                                wrap: word-wrap;
-                            }
-                            ScrollView {
-                                height: 300px;
-                                VerticalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    Text {
-                                        text: root.detail-what;
-                                        color: Theme.foreground;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: root.detail-features;
-                                        color: Theme.muted;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: root.detail-kinks;
-                                        color: Theme.muted;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: root.detail-basis;
-                                        color: Theme.faint;
-                                        font-size: 11px;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Button {
-                                    text: "Add to Lana's rig";
-                                    clicked => {
-                                        root.add-selected-to-trial();
-                                    }
-                                }
-                                Button {
-                                    text: "Ask Lana";
-                                    clicked => {
-                                        root.active-tab = 1;
-                                    }
-                                }
-                            }
+                    NavChip {
+                        text: "✕";
+                        clicked => {
+                            root.lexicon-open = false;
                         }
                     }
                 }
-            }
-            Tab {
-                title: "Lana — guide & trial";
-                HorizontalLayout {
-                    spacing: 0px;
-                    // ---- column A: Lana herself ----
-                    VerticalLayout {
-                        width: 308px;
-                        padding: 10px;
-                        spacing: 6px;
-                        alignment: start;
-                        Rectangle {
-                            width: 288px;
-                            height: 360px;
-                            // No background, no clip: she floats over
-                            // the lab gradient (Owner, 2026-11-27). The
-                            // only thing under her is a soft contact
-                            // shadow — an ellipse on her spot, never a
-                            // panel; it follows her across and thins
-                            // while she's lifted.
-                            Rectangle {
-                                x: 54px + root.lana-x + root.lana-drag-x + 22px;
-                                y: 338px;
-                                width: 136px;
-                                height: 16px;
-                                border-radius: 8px;
-                                background: @radial-gradient(circle, #00000059, #00000000);
-                                opacity: root.lana-held ? 0.45 : 1.0;
-                            }
-                            // The figure cluster: halo, figure, zone
-                            // glows — one element that moves, rotates
-                            // about the grab point, and takes the
-                            // pointer. Transform owned by drag.rs.
-                            lana-fig := Rectangle {
-                                x: 54px + root.lana-x + root.lana-drag-x;
-                                y: root.lana-y + root.lana-drag-y;
-                                width: 180px;
-                                height: 360px;
-                                // Only the visual rotates. The drag
-                                // container — and the TouchArea below —
-                                // stays untransformed, so pointer
-                                // coords are plain figure-local and
-                                // the grab-point pin is exact at any
-                                // hang angle.
-                                lana-visual := Rectangle {
-                                width: 180px;
-                                height: 360px;
-                                transform-rotation: root.lana-angle;
-                                transform-origin: { x: root.lana-origin-x, y: root.lana-origin-y };
-                                // Her glow — the room answers her arousal.
-                                Rectangle {
-                                    x: -30px;
-                                    y: 20px;
-                                    width: 240px;
-                                    height: 320px;
-                                    border-radius: 120px;
-                                    background: @radial-gradient(circle, #ec489955, #ec489900);
-                                    opacity: 0.25 + root.lana-arousal * 0.0075;
-                                }
-                                Image {
-                                    source: root.lana-strip-idx == 0 ? Assets.lana-idle
-                                        : root.lana-strip-idx == 1 ? Assets.lana-guiding
-                                        : root.lana-strip-idx == 2 ? Assets.lana-waiting
-                                        : root.lana-strip-idx == 3 ? Assets.lana-success
-                                        : Assets.lana-error;
-                                    source-clip-x: root.lana-frame * 144;
-                                    source-clip-y: 0;
-                                    source-clip-width: 144;
-                                    source-clip-height: 288;
-                                    width: 180px;
-                                    height: 360px;
-                                }
-                            // The zones being played, glowing on her body.
-                            Rectangle {
-                                x: 42px;
-                                y: 98px;
-                                width: 96px;
-                                height: 44px;
-                                border-radius: 22px;
-                                background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
-                                opacity: root.zone-nip * 0.008;
-                            }
-                            Rectangle {
-                                x: 62px;
-                                y: 155px;
-                                width: 56px;
-                                height: 30px;
-                                border-radius: 15px;
-                                background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
-                                opacity: root.zone-ext * 0.008;
-                            }
-                            Rectangle {
-                                x: 70px;
-                                y: 174px;
-                                width: 52px;
-                                height: 28px;
-                                border-radius: 14px;
-                                background: @radial-gradient(circle, #f472b6aa, #ec489900);
-                                opacity: root.zone-int * 0.008;
-                            }
-                            Rectangle {
-                                x: 94px;
-                                y: 166px;
-                                width: 44px;
-                                height: 28px;
-                                border-radius: 14px;
-                                background: @radial-gradient(circle, #f472b6aa, #ec489900);
-                                opacity: root.zone-anal * 0.008;
-                            }
-                                }
-                            lana-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: root.lana-held ? MouseCursor.grabbing : MouseCursor.grab;
-                                pointer-event(ev) => {
-                                    if (ev.kind == PointerEventKind.down) {
-                                        root.lana-grab(self.mouse-x, self.mouse-y);
-                                    }
-                                    if (ev.kind == PointerEventKind.up) {
-                                        root.lana-release();
-                                    }
-                                }
-                            }
-                            }
-                        }
-                        Text {
-                            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class). Grab her and pick her up — where you hold her changes how she hangs.";
-                            color: Theme.faint;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: root.lana-band + (root.lana-stage == root.lana-band ? "" : " · " + root.lana-stage);
-                            color: Theme.pink-bright;
-                            font-weight: 700;
-                            font-size: 15px;
-                        }
-                        Meter {
-                            label: "Her arousal";
-                            value: root.lana-arousal;
-                            bar-color: Theme.pink;
-                        }
-                        Text {
-                            text: root.lana-events;
-                            color: Theme.muted;
-                            font-size: 12px;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: "“" + root.lana-reaction + "”";
-                            color: Theme.foreground;
-                            wrap: word-wrap;
-                        }
-                        Rectangle {
-                            height: 16px;
-                            TouchArea {
-                                clicked => {
-                                    root.show-details = !root.show-details;
-                                }
-                            }
-                            Text {
-                                text: (root.show-details ? "▾ " : "▸ ") + "Reading her closely — the details";
-                                color: Theme.faint;
-                                font-size: 11px;
-                            }
-                        }
-                        if root.show-details: Text {
-                            text: root.lana-params;
-                            color: Theme.faint;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                        }
-                        if root.show-details: Text {
-                            text: root.lana-clip;
-                            color: Theme.faint;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                        }
-                    }
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.border;
-                    }
-                    // ---- column B: guide + sensitivity ----
-                    VerticalLayout {
-                        width: 348px;
-                        padding: 10px;
-                        spacing: 6px;
-                        alignment: start;
-                        Text {
-                            text: "Lana explains";
-                            color: Theme.accent-bright;
-                            font-weight: 700;
-                            font-size: 14px;
-                        }
-                        Text {
-                            text: root.has-detail ? root.detail-title : "Start here: pick a toy in the Catalogue, add it to her rig, then raise its level gently and watch her.";
-                            color: Theme.foreground;
-                            font-weight: 700;
-                            wrap: word-wrap;
-                        }
-                        ScrollView {
-                            height: 218px;
-                            VerticalLayout {
-                                spacing: 6px;
-                                alignment: start;
-                                Text {
-                                    text: root.detail-what;
-                                    color: Theme.foreground;
-                                    wrap: word-wrap;
-                                }
-                                Text {
-                                    text: root.detail-features;
-                                    color: Theme.muted;
-                                    wrap: word-wrap;
-                                }
-                                Text {
-                                    text: root.detail-kinks;
-                                    color: Theme.muted;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
-                        Button {
-                            text: "Add selected device to the rig";
-                            clicked => {
-                                root.add-selected-to-trial();
-                            }
-                        }
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border;
-                        }
-                        Text {
-                            text: "How she likes it — sensitivity & zones";
-                            color: Theme.accent-bright;
-                            font-weight: 700;
-                            font-size: 14px;
-                        }
-                        Text {
-                            text: "Her comfort, her pace — every body is different. These are her preferences; the sliders fine-tune them, zone by zone.";
-                            color: Theme.muted;
-                            font-size: 11px;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            Button {
-                                text: "Keen";
-                                clicked => { root.profile-selected(0); }
-                            }
-                            Button {
-                                text: "Responsive";
-                                clicked => { root.profile-selected(1); }
-                            }
-                            Button {
-                                text: "Lana's own";
-                                clicked => { root.profile-selected(2); }
-                            }
-                            Button {
-                                text: "Slow burn";
-                                clicked => { root.profile-selected(3); }
-                            }
-                            Button {
-                                text: "Gentle";
-                                clicked => { root.profile-selected(4); }
-                            }
-                        }
-                        Text {
-                            text: "Her settings: " + root.profile-name;
-                            color: Theme.foreground;
-                            font-size: 12px;
-                            font-weight: 700;
-                        }
-                        for zone[idx] in ["External (clitoral)", "Internal (vaginal)", "Anal", "Nipples"]: HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: zone;
-                                color: Theme.muted;
-                                font-size: 11px;
-                                width: 108px;
-                                vertical-alignment: center;
-                            }
-                            Slider {
-                                minimum: 20;
-                                maximum: 200;
-                                value: root.zone-values[idx];
-                                horizontal-stretch: 1;
-                                released(value) => {
-                                    root.zone-changed(idx, value);
-                                }
-                            }
-                        }
-                        ScrollView {
-                            vertical-stretch: 1;
-                            VerticalLayout {
-                                alignment: start;
-                                Text {
-                                    text: root.profile-text;
-                                    color: Theme.muted;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
-                    }
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.border;
-                    }
-                    // ---- column C: the rig + live feed ----
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        padding: 10px;
-                        spacing: 6px;
-                        alignment: start;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "Play rig — a simulation with virtual toys";
-                                color: Theme.accent-bright;
-                                font-weight: 700;
-                                font-size: 14px;
-                                horizontal-stretch: 1;
-                            }
-                            Text {
-                                text: root.trial-count;
-                                color: Theme.muted;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                            }
-                            Button {
-                                text: "Clear";
-                                clicked => { root.trial-clear(); }
-                            }
-                        }
-                        if root.trial-note != "": Text {
-                            text: "Lana: “" + root.trial-note + "”";
-                            color: Theme.pink-bright;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: root.combo-text;
-                            color: Theme.muted;
-                            font-size: 12px;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: "Watch her — the glow on her body shows where each toy is playing. These bars are just the details.";
-                            color: Theme.muted;
-                            font-size: 11px;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Meter {
-                                label: "Outside";
-                                value: root.zone-ext;
-                                width: 118px;
-                            }
-                            Meter {
-                                label: "Inside";
-                                value: root.zone-int;
-                                width: 118px;
-                            }
-                            Meter {
-                                label: "Anal";
-                                value: root.zone-anal;
-                                width: 118px;
-                            }
-                            Meter {
-                                label: "Nipples";
-                                value: root.zone-nip;
-                                width: 118px;
-                            }
-                            Meter {
-                                label: "All of her";
-                                value: root.total-pleasure;
-                                bar-color: Theme.pink;
-                                width: 118px;
-                            }
-                        }
-                        Image {
-                            source: root.trace-image;
-                            width: 600px;
-                            height: 96px;
-                            image-fit: fill;
-                        }
-                        Text {
-                            text: "The last 30 seconds, drawn live — a pink line per toy for how it feels to her, violet for pressure, white for her arousal.";
-                            color: Theme.faint;
-                            font-size: 10px;
-                        }
-                        // NOTE: a `for` inside a ScrollView clips to the
-                        // first row in this Slint build (verified by pixel
-                        // measurement), so the rig list scrolls manually:
-                        // clipped viewport + offset content + step buttons.
-                        Rectangle {
-                            vertical-stretch: 1;
-                            rig-view := Rectangle {
-                                width: parent.width;
-                                height: parent.height;
-                                TouchArea {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    scroll-event(event) => {
-                                        root.rig-scroll = clamp(root.rig-scroll - event.delta-y / 1px, 0, max(0, root.rig-height - rig-view.height / 1px));
-                                        return EventResult.accept;
-                                    }
-                                }
-                                Rectangle {
-                                    y: -root.rig-scroll * 1px;
-                                    height: root.rig-height * 1px;
-                                    for toy in root.trial-toys: TrialToyCard {
-                                        y: toy.y-offset * 1px;
-                                        width: parent.width;
-                                        data: toy;
-                                        trial-remove(index) => { root.trial-remove(index); }
-                                        channel-released(toy-index, channel, value) => {
-                                            root.channel-released(toy-index, channel, value);
-                                        }
-                                    }
-                                }
-                            }
-                            Button {
-                                x: parent.width - 32px;
-                                y: 4px;
-                                width: 28px;
-                                text: "▲";
-                                clicked => {
-                                    root.rig-scroll = max(0, root.rig-scroll - 134);
-                                }
-                            }
-                            Button {
-                                x: parent.width - 32px;
-                                y: 40px;
-                                width: 28px;
-                                text: "▼";
-                                clicked => {
-                                    root.rig-scroll = clamp(root.rig-scroll + 134, 0, max(0, root.rig-height - rig-view.height / 1px));
-                                }
-                            }
-                        }
+                LineEdit {
+                    placeholder-text: "Search the lexicon…";
+                    edited(text) => {
+                        root.lexicon-search(text);
                     }
                 }
-            }
-            Tab {
-                title: "Lexicon";
                 HorizontalLayout {
-                    spacing: 0px;
+                    spacing: 10px;
+                    vertical-stretch: 1;
                     VerticalLayout {
-                        width: 380px;
-                        padding: 10px;
-                        spacing: 8px;
-                        LineEdit {
-                            placeholder-text: "Search the lexicon…";
-                            edited(text) => {
-                                root.lexicon-search(text);
-                            }
-                        }
+                        width: 218px;
                         ListView {
                             vertical-stretch: 1;
                             for entry[idx] in root.lexicon-rows: Rectangle {
                                 height: 44px;
+                                border-radius: 8px;
                                 TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => {
                                         root.lexicon-select(idx);
                                     }
@@ -1183,13 +1425,12 @@ export component MainWindow inherits Window {
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
-                        padding: 14px;
                         spacing: 8px;
                         alignment: start;
                         Text {
                             text: root.lexicon-title;
                             color: Theme.foreground;
-                            font-size: 17px;
+                            font-size: 16px;
                             font-weight: 700;
                             wrap: word-wrap;
                         }
@@ -1197,9 +1438,10 @@ export component MainWindow inherits Window {
                             text: root.lexicon-meta;
                             color: Theme.faint;
                             font-size: 12px;
+                            wrap: word-wrap;
                         }
                         ScrollView {
-                            height: 430px;
+                            height: 420px;
                             VerticalLayout {
                                 alignment: start;
                                 Text {
@@ -1210,78 +1452,97 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.lexicon-can-try: Button {
-                            text: "Try it with Lana — set this session up in her play rig";
+                            text: "Try it with Lana — set up her rig";
                             clicked => {
                                 root.lexicon-try();
-                                root.active-tab = 1;
+                                root.lexicon-open = false;
                             }
                         }
                     }
                 }
             }
-            Tab {
-                title: "Control (preview)";
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 12px;
+        }
+
+        // ---- control preview: an inert card, kept honest ----
+        if root.control-open: FloatCard {
+            x: 360px;
+            y: 190px;
+            width: 560px;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                alignment: start;
+                HorizontalLayout {
+                    Text {
+                        text: "Control preview";
+                        color: Theme.accent-bright;
+                        font-weight: 700;
+                        font-size: 15px;
+                        horizontal-stretch: 1;
+                    }
+                    NavChip {
+                        text: "✕";
+                        clicked => {
+                            root.control-open = false;
+                        }
+                    }
+                }
+                Text {
+                    text: "Control preview — rendering proof only. No device connection exists in this build, and none can be made from this pane.";
+                    color: Theme.foreground;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 10px;
                     alignment: start;
                     Text {
-                        text: "Control preview — rendering proof only. No device connection exists in this build, and none can be made from this pane.";
+                        text: "Master switch";
                         color: Theme.foreground;
-                        wrap: word-wrap;
+                        vertical-alignment: center;
                     }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
-                        Text {
-                            text: "Master switch";
-                            color: Theme.foreground;
-                            vertical-alignment: center;
-                        }
-                        Switch {
-                            checked: false;
-                            enabled: false;
-                        }
-                        Text {
-                            text: "OFF";
-                            color: Theme.link;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
-                        Text {
-                            text: "Intensity";
-                            color: Theme.foreground;
-                            vertical-alignment: center;
-                        }
-                        Slider {
-                            minimum: 0;
-                            maximum: 100;
-                            value: 0;
-                            enabled: false;
-                            width: 280px;
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
-                        Button {
-                            text: "Start pattern";
-                            enabled: false;
-                        }
-                        Button {
-                            text: "STOP";
-                            enabled: false;
-                        }
+                    Switch {
+                        checked: false;
+                        enabled: false;
                     }
                     Text {
-                        text: "While the master switch is off, every control stays inert — including STOP, which is on screen from the first frame. Device wiring lands in a later phase and reaches devices only through ache's decide() gate and tool surface.";
-                        wrap: word-wrap;
-                        color: Theme.muted;
+                        text: "OFF";
+                        color: Theme.link;
+                        font-weight: 700;
+                        vertical-alignment: center;
                     }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    Text {
+                        text: "Intensity";
+                        color: Theme.foreground;
+                        vertical-alignment: center;
+                    }
+                    Slider {
+                        minimum: 0;
+                        maximum: 100;
+                        value: 0;
+                        enabled: false;
+                        width: 280px;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    Button {
+                        text: "Start pattern";
+                        enabled: false;
+                    }
+                    Button {
+                        text: "STOP";
+                        enabled: false;
+                    }
+                }
+                Text {
+                    text: "While the master switch is off, every control stays inert — including STOP, which is on screen from the first frame. Device wiring lands in a later phase and reaches devices only through ache's decide() gate and tool surface.";
+                    wrap: word-wrap;
+                    color: Theme.muted;
                 }
             }
         }
