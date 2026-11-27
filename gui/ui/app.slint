@@ -1,0 +1,360 @@
+// ache-gui Phase 1 UI: device catalogue browser + inert control preview.
+//
+// Safety shape, by construction: the master switch exists only as a
+// rendered OFF switch in this phase. There is no property, callback, or
+// code path in this file that can enable a control or reach a device.
+//
+// Theme (Owner ruling, 2026-11-27 01:07 PT): dark mode by default, with
+// a contrasting purple/pink accent pair to balance. Dark is forced in
+// code — both windows assign `Palette.color-scheme = ColorScheme.dark`
+// at init, which replaces the platform-preference binding for the whole
+// process; there is no light default and no theme toggle in this build.
+// All app-owned colours come from the `Theme` global below; the std
+// widgets (search field, tabs, switch, slider, buttons) render their
+// dark variants from the forced Palette scheme. Body text stays on the
+// neutral dark palette (foreground / muted / faint); purple and pink
+// are accents. Every text-bearing pair measures WCAG AA (>= 4.5:1) —
+// the ratios are recorded in the phase record (RECORD.md).
+
+import {
+    AboutSlint,
+    Button,
+    LineEdit,
+    ListView,
+    Palette,
+    Slider,
+    Switch,
+    TabWidget,
+} from "std-widgets.slint";
+
+/// The app theme: a plum-dark ground, neutral text ramp, primary
+/// purple accent, secondary pink highlight. Chip colours sit on the
+/// violet → fuchsia → pink → rose arc, one per support bucket; the
+/// printed bucket label carries the distinction, the hue reinforces
+/// it. Link-state colours keep their semantic coding (green / red /
+/// amber), brightened for the dark ground.
+export global Theme {
+    out property <color> background: #1e1930;
+    out property <color> foreground: #f5f2fa;
+    out property <color> muted: #b9aec9;
+    out property <color> faint: #9a8bb0;
+    out property <color> border: #453761;
+    out property <color> accent: #8b5cf6;
+    out property <color> accent-bright: #c4b5fd;
+    out property <color> accent-deep: #4c1d95;
+    out property <color> pink: #ec4899;
+    out property <color> pink-bright: #f9a8d4;
+    out property <color> link: #f472b6;
+    out property <color> chip-a: #7c3aed;
+    out property <color> chip-a-g: #a21caf;
+    out property <color> chip-b: #be185d;
+    out property <color> chip-c: #9f1239;
+    out property <color> state-en: #4ade80;
+    out property <color> state-dead: #f87171;
+    out property <color> warn: #fbbf24;
+}
+
+/// One catalogue row, mirrored by `DeviceRow` construction in main.rs.
+/// `url` is empty exactly when `has-url` is false (IoST lists no link);
+/// the UI shows the absence instead of guessing a link.
+export struct DeviceRow {
+    brand: string,
+    device: string,
+    device-type: string,
+    bucket: string,
+    untested: bool,
+    link-state: string,
+    url: string,
+    has-url: bool,
+}
+
+component CatalogueRow inherits Rectangle {
+    in property <DeviceRow> data;
+    callback open-url(string);
+
+    height: 62px;
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 10px;
+
+        Rectangle {
+            width: 46px;
+            height: 24px;
+            y: 4px;
+            border-radius: 4px;
+            background: data.bucket == "A" ? Theme.chip-a
+                : data.bucket == "A-g" ? Theme.chip-a-g
+                : data.bucket == "B" ? Theme.chip-b
+                : Theme.chip-c;
+            Text {
+                text: data.bucket;
+                color: white;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: data.brand + " — " + data.device;
+                    color: Theme.foreground;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+                Text {
+                    text: data.device-type;
+                    color: Theme.muted;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if data.untested: Text {
+                    text: "untested upstream";
+                    color: Theme.warn;
+                    font-size: 11px;
+                }
+                Text {
+                    text: data.link-state;
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: data.link-state == "EN" ? Theme.state-en
+                        : data.link-state == "DEAD" ? Theme.state-dead
+                        : data.link-state == "NON-EN" ? Theme.warn
+                        : Theme.faint;
+                }
+            }
+            if data.has-url: TouchArea {
+                height: 18px;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-url(data.url);
+                }
+                Text {
+                    x: 0px;
+                    width: parent.width;
+                    text: data.url;
+                    color: Theme.link;
+                    font-size: 12px;
+                    horizontal-alignment: left;
+                    overflow: elide;
+                }
+            }
+            if !data.has-url: Text {
+                text: "no link listed in IoST";
+                color: Theme.faint;
+                font-size: 12px;
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "ache — device catalogue";
+    width: 1120px;
+    height: 780px;
+    background: Theme.background;
+
+    // Dark by default (Owner ruling, 2026-11-27): force the dark
+    // scheme at startup, independent of the OS preference. See the
+    // theme note at the top of this file.
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    in property <[DeviceRow]> devices;
+    in property <string> summary;
+    callback search-changed(string);
+    callback open-url(string);
+    callback show-about();
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+            Text {
+                text: "ache device catalogue";
+                color: Theme.accent-bright;
+                font-size: 20px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            LineEdit {
+                placeholder-text: "Search brand, device, or type…";
+                horizontal-stretch: 1;
+                edited(text) => {
+                    root.search-changed(text);
+                }
+            }
+            Button {
+                text: "About";
+                clicked => {
+                    root.show-about();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-bottom: 6px;
+            Text {
+                text: root.summary;
+                color: Theme.muted;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle {
+            height: 30px;
+            background: Theme.accent-deep;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text {
+                    text: "MASTER OFF — ";
+                    color: Theme.pink-bright;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "device control is not wired in this build; every control is inert.";
+                    color: white;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle {
+            height: 2px;
+            background: Theme.pink;
+        }
+
+        TabWidget {
+            vertical-stretch: 1;
+            Tab {
+                title: "Catalogue";
+                ListView {
+                    for device in root.devices: CatalogueRow {
+                        data: device;
+                        open-url(url) => {
+                            root.open-url(url);
+                        }
+                    }
+                }
+            }
+            Tab {
+                title: "Control (preview)";
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: "Control preview — rendering proof only. No device connection exists in this build, and none can be made from this pane.";
+                        color: Theme.foreground;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Text {
+                            text: "Master";
+                            color: Theme.foreground;
+                            vertical-alignment: center;
+                        }
+                        Switch {
+                            checked: false;
+                            enabled: false;
+                        }
+                        Text {
+                            text: "OFF";
+                            color: Theme.link;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Text {
+                            text: "Intensity";
+                            color: Theme.foreground;
+                            vertical-alignment: center;
+                        }
+                        Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: 0;
+                            enabled: false;
+                            width: 280px;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Button {
+                            text: "Start pattern";
+                            enabled: false;
+                        }
+                        Button {
+                            text: "STOP";
+                            enabled: false;
+                        }
+                    }
+                    Text {
+                        text: "While the master switch is off, every control stays inert — including STOP, which is on screen from the first frame. Device wiring lands in a later phase and reaches devices only through ache's decide() gate and tool surface.";
+                        wrap: word-wrap;
+                        color: Theme.muted;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// About dialog. Displaying the `AboutSlint` widget here, in a dialog
+/// reachable from the window's top level, is condition (a) of the Slint
+/// Royalty-free License attribution requirement (see README.md).
+export component AboutDialog inherits Window {
+    title: "About ache";
+    width: 440px;
+    height: 430px;
+    background: Theme.background;
+
+    // Same forced dark scheme as the main window (see MainWindow).
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text {
+            text: "ache";
+            color: Theme.foreground;
+            font-size: 22px;
+            font-weight: 700;
+        }
+        Text {
+            text: "Unified haptics MCP — device catalogue browser (GUI phase 1).";
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "ache's own code is licensed under the Apache License 2.0. This application is built with the Slint toolkit under the Slint Royalty-free Desktop, Mobile, and Web Applications License; the required attribution follows.";
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        AboutSlint { }
+    }
+}
