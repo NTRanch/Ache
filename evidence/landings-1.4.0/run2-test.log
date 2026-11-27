@@ -1,0 +1,570 @@
+
+running 261 tests
+test automation::tests::a4_events_cannot_carry_values_and_unknown_sources_do_not_bind ... ok
+test automation::tests::a1_queue_job_mutual_restart_is_bounded_per_tick ... ok
+test automation::tests::a3_add_variable_drift_clamps_at_the_declared_range ... ok
+test automation::tests::a1_runaway_while_is_stopped_at_max_runs_with_the_reason_logged ... ok
+test automation::tests::hold_toggle_timer_and_toy_triggers_fire ... ok
+test automation::tests::seeded_hash01_is_replayable ... ok
+test config::tests::bad_transport_value_is_refused ... ok
+test config::tests::buttplug_section_is_fail_closed_too ... ok
+test config::tests::ceiling_21_is_refused ... ok
+test automation::tests::v4_triggers_jobs_queues_variables_and_controls_produce_the_expected_effects ... ok
+test config::tests::buttplug_section_parses_and_defaults ... ok
+test config::tests::empty_file_yields_documented_defaults ... ok
+test config::tests::full_real_config_is_accepted ... ok
+test automation::tests::a5_malformed_automations_are_load_errors ... ok
+test config::tests::dns_hostname_is_accepted ... ok
+test config::tests::hosts_that_could_rewrite_the_url_are_refused ... ok
+test config::tests::missing_file_is_config_missing ... ok
+test config::tests::port_0_and_overflow_are_refused ... ok
+test config::tests::server_api_section_defaults_off_with_store_paths ... ok
+test config::tests::range_edges_are_accepted ... ok
+test config::tests::server_api_section_is_fail_closed_too ... ok
+test config::tests::server_api_pass_entries_cannot_escape_the_store ... ok
+test config::tests::tcode_is_off_by_default_with_koisync_limits ... ok
+test config::tests::unknown_key_is_refused ... ok
+test config::tests::watchdog_0_and_61_are_refused ... ok
+test decide::axes_tests::axis_frames_pass_the_same_state_gate ... ok
+test config::tests::wrong_types_and_malformed_toml_are_refused ... ok
+test decide::axes_tests::frames_render_koisync_tcode ... ok
+test decide::axes_tests::over_range_positions_clamp_silently_never_reach_the_wire_raw ... ok
+test decide::axes_tests::malformed_frames_are_refused ... ok
+test decide::axes_tests::window_and_slew_clamp_and_count ... ok
+test decide::step2_tests::newest_actions_have_exact_wire_names_and_ranges ... ok
+test config::tests::tcode_section_fails_closed ... ok
+test decide::step2_tests::newest_actions_obey_ceiling_and_feature_maximum ... ok
+test decide::step2_tests::newest_actions_refuse_unreported_support_and_unbounded_duration ... ok
+test decide::step2_tests::reported_maximum_cannot_expand_the_documented_range ... ok
+test decide::tests::indefinite_output_is_refused_not_clamped ... ok
+test decide::tests::function_at_ceiling_passes_unclamped_with_exact_wire_body ... ok
+test decide::tests::fifty_one_strengths_are_refused ... ok
+test decide::tests::lower_configured_ceiling_clamps ... ok
+test decide::tests::interval_at_or_below_100_ms_is_refused ... ok
+test decide::tests::malformed_patterns_are_refused ... ok
+test decide::tests::narrow_feature_range_clamps_below_the_ceiling ... ok
+test decide::tests::negative_strength_and_oversized_toy_are_refused ... ok
+test decide::tests::output_while_disarmed_is_denied ... ok
+test decide::tests::output_without_a_target_is_denied ... ok
+test decide::tests::pattern_builds_the_documented_rule_and_strength_strings ... ok
+test decide::tests::pattern_strengths_clamp_per_value_inside_the_list ... ok
+test decide::tests::pattern_with_empty_features_targets_all_functions ... ok
+test decide::tests::plan_applies_the_same_state_gate_on_any_target ... ok
+test decide::tests::plan_clamps_against_the_targets_own_range ... ok
+test decide::tests::plan_refuses_a_feature_the_target_does_not_offer ... ok
+test decide::tests::plan_refuses_a_pattern_letter_the_target_lacks ... ok
+test decide::tests::plan_against_lovense_caps_renders_the_identical_wire_body ... ok
+test decide::tests::plan_refuses_presets_where_the_provider_has_none ... ok
+test decide::tests::preset_wave_builds_the_documented_body ... ok
+test decide::tests::stop_body_is_the_documented_zero ... ok
+test decide::tests::stop_is_allowed_in_every_state ... ok
+test decide::tests::strength_above_ceiling_is_clamped_never_sent_raw ... ok
+test decide::tests::unknown_function_and_preset_are_refused ... ok
+test error::tests::long_messages_are_truncated_on_a_char_boundary ... ok
+test expr::tests::arithmetic_precedence_and_comparisons ... ok
+test expr::tests::division_and_modulo_by_zero_are_zero_not_errors ... ok
+test expr::tests::hash01_is_deterministic_and_seed_dependent ... ok
+test expr::tests::every_function_evaluates_its_law ... ok
+test expr::tests::hash01_without_a_seed_is_refused ... ok
+test expr::tests::names_resolve_to_slots ... ok
+test expr::tests::overflow_is_defined_as_zero ... ok
+test expr::tests::unknown_names_strings_and_code_shapes_are_refused ... ok
+test expr::tests::depth_and_node_bounds_are_load_errors ... ok
+test funscript::tests::inverted_flag_flips_positions ... ok
+test funscript::tests::a5_malformed_funscripts_are_import_errors ... ok
+test funscript::tests::v3_known_funscript_compiles_to_the_expected_block_list ... ok
+test funscript::tests::single_axis_is_the_degenerate_pack ... ok
+test funscript::tests::a5_packs_load_all_or_none ... ok
+test guard::tests::discover_list_and_valid_calls_forward ... ok
+test guard::tests::call_shape_refusals_match_the_baseline ... ok
+test guard::tests::legacy_initialize_gets_the_typed_era_refusal ... ok
+test guard::tests::non_object_id_is_null_in_error_frames ... ok
+test guard::tests::malformed_envelopes_match_the_baseline ... ok
+test guard::tests::notification_shaped_frames_drop_unexecuted ... ok
+test guard::tests::ordering_tracks_the_inflight_slot_and_drain ... ok
+test guard::tests::ping_is_answered_with_an_empty_result ... ok
+test guard::tests::string_ids_are_preserved_in_replies ... ok
+test guard::tests::unknown_methods_get_the_baseline_wording ... ok
+test guard::tests::unknown_tools_are_refused_before_any_dispatch ... ok
+test pattern::tests::a3_expression_output_is_clamped_into_range_every_tick ... ok
+test pattern::tests::a2_computed_total_over_the_bound_is_refused_at_load ... ok
+test funscript::tests::v3_six_axis_pack_compiles_to_six_aligned_patterns ... ok
+test pattern::tests::block_loops_and_pattern_repeat_extend_the_total ... ok
+test pattern::tests::a5_malformed_patterns_are_load_errors ... ok
+test pattern::tests::falling_linear_ramps_down ... ok
+test pattern::tests::scripted_patterns_refuse_code_and_both_bodies ... ok
+test pattern::tests::v1_each_block_kind_matches_its_closed_form_law ... ok
+test pattern::tests::hash_is_stable_and_content_addressed ... ok
+test provider::step2_tests::absent_functions_are_unreported_not_assumed ... ok
+test pattern::tests::v2_scripted_matches_a_hand_computed_tick_table ... ok
+test provider::step2_tests::generic_model_reduction_does_not_claim_tenera_identity_or_suction ... ok
+test provider::step2_tests::mapped_actions_refuse_invalid_duration_negative_strength_and_disarmed_equally ... ok
+test provider::step2_tests::mappings_never_create_an_unenumerated_output_or_use_display_name ... ok
+test provider::step2_tests::named_route_reductions_appear_in_device_data ... ok
+test provider::step2_tests::mapped_actions_have_equal_clamping_and_execute_on_mock_providers ... ok
+test provider::step2_tests::reported_depth_stroke_preserve_their_api_ranges ... ok
+test provider::step2_tests::rolling_bead_is_allowed_only_by_the_named_ble_binding ... ok
+test provider::step2_tests::named_refusals_are_equal_and_send_nothing_on_mock_providers ... ok
+test provider::step2_tests::named_bindings_require_and_preserve_runtime_outputs ... ok
+test provider::tests::fixture_devices_cover_two_capability_shapes ... ok
+test provider::tests::inert_provider_reports_unavailable_never_empty_success ... ok
+test provider_buttplug::step2_tests::actual_dispatch_translation_uses_named_native_outputs_and_full_scale ... ok
+test provider::tests::lovense_devices_carry_reported_capabilities_as_data ... ok
+test provider_buttplug::step2_tests::pattern_pump_never_uses_the_three_step_function_divisor ... ok
+test provider_server_api::tests::disabled_pairing_surface_refuses_qr_and_reports_disabled ... ok
+test provider_server_api::tests::clamped_strength_is_what_reaches_the_wire ... ok
+test provider_server_api::tests::fixture_devices_carry_serverapi_ids_and_preset_support ... ok
+test provider_server_api::tests::fixture_execute_posts_the_gate_body_with_credentials_merged ... ok
+test provider_server_api::tests::fixture_pairing_reports_paired_and_issues_fixture_qr ... ok
+test provider_server_api::tests::fixture_zero_posts_the_gate_stop ... ok
+test provider_server_api::tests::malformed_qr_answers_are_refused_not_invented ... ok
+test provider_server_api::tests::qr_answer_parses_the_documented_shape ... ok
+test provider_server_api::tests::stop_still_zeroes_after_a_refused_execute ... ok
+test provider_server_api::tests::unavailable_secret_degrades_structurally_never_panics ... ok
+test provider_server_api::tests::wire_merge_adds_auth_and_touches_nothing_else ... ok
+test provider_tcode::tests::approved_frames_reach_the_link_as_tcode_and_set_the_slew_reference ... ok
+test provider_tcode::tests::depth_solver_follows_the_koisync_laws ... ok
+test provider_tcode::tests::depth_spec_compiles_to_an_l0_pattern_through_the_adapter ... ok
+test provider_tcode::tests::disabled_provider_refuses_and_plans_other_than_stop_are_refused ... ok
+test provider_tcode::tests::discovery_reports_the_kind_axes_as_capabilities ... ok
+test provider_tcode::tests::malformed_depth_specs_are_refused ... ok
+test provider_tcode::tests::mid_command_dropout_is_a_typed_error_and_stop_still_attempts ... ok
+REPLAY a1_mutual_restart lines=5 last_t=2500 stop=session_duration
+test replay_tests::a1_mutual_restart_ends_at_the_session_bound ... ok
+REPLAY a3_ceiling lines=192 clamps=168 ceiling=6
+test replay_tests::a3_every_emitted_command_is_at_or_under_its_ceiling_including_slow_drift ... ok
+REPLAY format=automation run=1 hash=39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0 lines=425 clamps=31 stop=session_duration
+REPLAY format=automation run=2 hash=39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0 lines=425 clamps=31 stop=session_duration
+REPLAY format=automation run=3 hash=39068970d053a3de9876e154e9b3abba8f04f5fa419222ff22451f50bf6d30d0 lines=425 clamps=31 stop=session_duration
+test replay_tests::replay_automation_with_jobs_queues_seed_and_event_log ... ok
+REPLAY format=basic run=1 hash=1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181 lines=427 clamps=0 stop=complete
+REPLAY format=basic run=2 hash=1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181 lines=427 clamps=0 stop=complete
+REPLAY format=basic run=3 hash=1c5ab20f22cb7bd630f14085f4c707c81334bd12dc4511380f330ce93b666181 lines=427 clamps=0 stop=complete
+test replay_tests::replay_basic_pattern ... ok
+REPLAY format=funscript run=1 hash=aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f lines=221 clamps=189 stop=complete
+REPLAY format=funscript run=2 hash=aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f lines=221 clamps=189 stop=complete
+REPLAY format=funscript run=3 hash=aced8c512c988a558673f5182b270d0e282c55691ef364c5de0557ea42de719f lines=221 clamps=189 stop=complete
+test replay_tests::replay_funscript_import ... ok
+REPLAY format=pack run=1 hash=6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331 lines=148 clamps=802 stop=complete
+REPLAY format=pack run=2 hash=6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331 lines=148 clamps=802 stop=complete
+REPLAY format=pack run=3 hash=6920faaac8b9c2957c67758263b420127ea4bd9c3df8f3fbfac131bd1ad37331 lines=148 clamps=802 stop=complete
+test replay_tests::replay_multi_axis_pack ... ok
+REPLAY format=scripted run=1 hash=25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e lines=466 clamps=0 stop=complete
+REPLAY format=scripted run=2 hash=25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e lines=466 clamps=0 stop=complete
+REPLAY format=scripted run=3 hash=25340eb8622805a8d2151334fdbbdce2c6585a48e8591e0863f21bdd88c2e22e lines=466 clamps=0 stop=complete
+test replay_tests::replay_scripted_pattern ... ok
+test provider_server_api::tests::real_transport_get_toys_against_loopback_stub ... ok
+test provider_buttplug::tests::embedded_provider_never_fakes_devices_without_hardware ... ok
+test server::ac2_stop_tests::ac2_gate_allows_stop_in_all_four_state_combinations ... ok
+test replay_tests::the_denial_seed_denies_at_the_meter_peak ... ok
+test server::ac2_stop_tests::ac2_heartbeat_healthy_keeps_output_and_stop_is_next ... ok
+test server::ac2_stop_tests::ac2_heartbeat_loss_zeroes_with_no_further_call_then_stop_still_works ... ok
+test server::ac2_stop_tests::ac2_stop_after_session_drop_is_not_gated_by_degradation ... ok
+test server::ac2_stop_tests::ac2_stop_as_first_call_after_heartbeat_loss_is_not_swallowed ... ok
+test server::ac2_stop_tests::ac2_stop_cancels_a_unified_buttplug_pattern ... ok
+test server::ac2_stop_tests::ac2_stop_with_no_target_is_a_local_zero_not_a_refusal ... ok
+test server::ac2_stop_tests::ac2_stop_zeroes_a_unified_buttplug_function_session ... ok
+REPLAY format=seed:denial-arousal-meter run=1 hash=a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941 lines=1200 clamps=0 stop=session_duration
+REPLAY format=seed:denial-arousal-meter run=2 hash=a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941 lines=1200 clamps=0 stop=session_duration
+REPLAY format=seed:denial-arousal-meter run=3 hash=a20595894c9678fb6919a34711502b2cc5ac47b8cf4534417043b79ab7a93941 lines=1200 clamps=0 stop=session_duration
+test provider_server_api::tests::real_transport_send_command_against_loopback_stub ... ok
+test server::ac2_stop_tests::ac2_stop_matrix_from_every_idle_and_active_state ... ok
+REPLAY format=seed:edge-pressure-shape run=1 hash=1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9 lines=835 clamps=0 stop=session_duration
+REPLAY format=seed:edge-pressure-shape run=2 hash=1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9 lines=835 clamps=0 stop=session_duration
+REPLAY format=seed:edge-pressure-shape run=3 hash=1523d19323a963ea2f0b5e16c87bd28b5cae31cf04c588eec59dd0c2ea4c02e9 lines=835 clamps=0 stop=session_duration
+REPLAY format=seed:edge-stillness run=1 hash=f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1 lines=864 clamps=0 stop=session_duration
+REPLAY format=seed:edge-stillness run=2 hash=f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1 lines=864 clamps=0 stop=session_duration
+REPLAY format=seed:edge-stillness run=3 hash=f439c2216dd5d39f019c25998427ce3def7d9ecdc381e923e44108ccd65529e1 lines=864 clamps=0 stop=session_duration
+REPLAY format=seed:hr-trainer run=1 hash=e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80 lines=808 clamps=0 stop=session_duration
+REPLAY format=seed:hr-trainer run=2 hash=e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80 lines=808 clamps=0 stop=session_duration
+REPLAY format=seed:hr-trainer run=3 hash=e09c7ff38b056dde2a8a4bba90507aef84d04f93670ca9476c7c9f057c4e0f80 lines=808 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-clicker run=1 hash=3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf lines=7 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-clicker run=2 hash=3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf lines=7 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-clicker run=3 hash=3425b77a132ed9f61b3cf7fb59e89bf7b1559d24880c43e98c3e4b0e7079cbaf lines=7 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-keyword-ladder run=1 hash=a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7 lines=61 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-keyword-ladder run=2 hash=a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7 lines=61 clamps=0 stop=session_duration
+REPLAY format=seed:hyp-keyword-ladder run=3 hash=a06d9798af0648cd05b42ca5f1a5a15b9e614b5e2bc64ebbfb5bd3893ed470a7 lines=61 clamps=0 stop=session_duration
+REPLAY format=seed:say-stop runs=3 log=["t=5000ms notify: stop word heard: all output stopped"]
+REPLAY format=seed:forher-pair run=1 hash=094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b lines=352 clamps=0 stop=complete
+REPLAY format=seed:forher-pair run=2 hash=094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b lines=352 clamps=0 stop=complete
+REPLAY format=seed:forher-pair run=3 hash=094885d6429c22e7ddd941e19814575510dfe82df40c1b80e981d85cf3d7397b lines=352 clamps=0 stop=complete
+REPLAY format=seed:alma-draining-loop run=1 hash=8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c lines=321 clamps=0 stop=complete
+REPLAY format=seed:alma-draining-loop run=2 hash=8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c lines=321 clamps=0 stop=complete
+REPLAY format=seed:alma-draining-loop run=3 hash=8def293f3ba9971bdb5600450877ba29e2f95a12225361aec34c474d59fb221c lines=321 clamps=0 stop=complete
+REPLAY format=seed:alma-nipple-cycle run=1 hash=e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172 lines=361 clamps=0 stop=complete
+REPLAY format=seed:alma-nipple-cycle run=2 hash=e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172 lines=361 clamps=0 stop=complete
+REPLAY format=seed:alma-nipple-cycle run=3 hash=e96567c99a0630b57a7e637ac0bde1a8cc0a25e84e21a03ffeea6613da8ab172 lines=361 clamps=0 stop=complete
+test replay_tests::seed_library_loads_whole_and_every_seed_replays_deterministically ... ok
+PROGRAM a6 stop=ache_program_stop latency_us=139 frames=7
+test server::program_tests::a4_gate_bypass_attempts_are_refused_and_send_nothing ... ok
+PROGRAM a6 stop=lovense_stop latency_us=98 frames=7
+test server::program_tests::a6_stop_mid_pattern_is_synchronous_and_final ... ok
+test server::program_tests::every_spec_kind_loads_hashes_and_sends_nothing ... ok
+PROGRAM live==replay hash=a5357f5782a6f5c1c8ae89683465ddc37835834059583c9996214a1e427942fa commands=32
+test server::program_tests::live_run_streams_exactly_the_pure_replay_and_ends_disarmed ... ok
+test server::program_tests::a_pattern_or_pack_runs_on_one_device_without_a_session ... ok
+test server::program_tests::program_tool_arguments_are_shape_checked_before_anything_runs ... ok
+test server::program_tests::tcode_is_a_fourth_provider_in_status_and_discovery ... ok
+test server::score_tests::adversarial_bad_parts_refuse_all_and_send_nothing_on_both_routes ... ok
+test server::score_tests::adversarial_bounds_unknown_devices_and_reduced_capabilities ... ok
+test server::score_tests::adversarial_disarmed_refuses_every_part_without_send ... ok
+test server::score_tests::adversarial_disconnect_reconnect_never_resumes_score ... ok
+test server::score_tests::adversarial_duplicate_and_conflicting_output_refused ... ok
+test server::score_tests::adversarial_malformed_score_rejects_unknown_fields_without_send ... ok
+test server::score_tests::adversarial_shutdown_cancels_all_parts_without_resume ... ok
+test server::score_tests::adversarial_stop_failure_still_zeroes_other_provider_and_cancels ... ok
+test server::program_tests::a6_watchdog_trip_during_an_automation_run_zeroes_everything ... ok
+test server::score_tests::adversarial_watchdog_cancels_whole_ensemble_and_no_resume ... ok
+test server::program_tests::a6_stop_button_and_stop_input_outrank_a_running_job_and_queue ... ok
+test server::score_tests::validation_ceiling_applies_to_every_part ... ok
+test server::score_tests::adversarial_stop_then_rearm_does_not_revive_waiting_streams ... ok
+test server::score_tests::validation_action_transition_zeroes_previous_action ... ok
+test server::score_tests::validation_healthy_heartbeat_preserves_ensemble ... ok
+test server::score_tests::validation_mixed_providers_start_and_stop_together ... ok
+test server::score_tests::validation_one_part_matches_single_command_and_wire ... ok
+test server::score_tests::validation_quartet_plans_differentiated_reported_actions ... ok
+test server::score_tests::validation_stop_zeroes_every_device_before_return ... ok
+test server::score_tests::validation_tool_returns_clamped_plan_with_one_new_surface ... ok
+test server::tests::adversarial_serverapi_output_while_disarmed_sends_nothing ... ok
+test server::tests::adversarial_serverapi_pairing_refuses_unknown_actions_and_fields ... ok
+test server::tests::adversarial_serverapi_send_failure_drops_session_and_still_zeroes ... ok
+test server::tests::arm_disarm_interleavings_stay_serialized_and_safe ... ok
+test server::tests::arm_refuses_without_a_target ... ok
+test server::tests::arming_is_explicit_and_discovery_does_not_arm ... ok
+test server::tests::buttplug_execute_failure_is_a_session_drop ... ok
+test server::tests::cross_provider_refusal_parity ... ok
+test server::tests::disarm_zeroes_synchronously_and_blocks_further_output ... ok
+test server::tests::extra_argument_fields_are_refused_before_any_transport_call ... ok
+test server::tests::full_mock_session_arm_function_pattern_preset_stop ... ok
+test server::tests::function_can_target_one_toy ... ok
+test server::tests::function_over_ceiling_is_clamped_on_the_wire_and_reported ... ok
+test server::tests::gated_function_on_a_buttplug_device_executes_the_plan ... ok
+test server::tests::malformed_output_arguments_are_refused_before_the_wire ... ok
+test server::tests::mock_status_is_labeled_mock_never_connected ... ok
+test server::tests::mock_toys_returns_the_fixture ... ok
+test server::tests::no_provider_available_is_typed_never_a_fake_success ... ok
+test server::tests::output_while_disarmed_is_denied_and_sends_nothing ... ok
+test server::tests::pattern_on_a_buttplug_device_executes_the_clamped_plan ... ok
+test server::tests::pattern_strengths_clamp_per_value_on_the_wire ... ok
+test server::tests::preset_on_a_buttplug_device_is_refused_and_executes_nothing ... ok
+test server::tests::real_status_reports_unconfigured_or_ready_with_target ... ok
+test server::tests::real_toys_runs_live_discovery_against_the_stub ... ok
+test server::tests::real_with_empty_host_makes_no_network_call ... ok
+test server::tests::s2_wire_bodies_are_constructed_only_in_the_gate ... ok
+test server::tests::serverapi_disabled_by_default_reports_typed_and_blocks_nothing_else ... ok
+test server::tests::serverapi_output_routes_through_the_gate_and_stop_zeroes_it ... ok
+test server::tests::serverapi_pairing_status_and_qr_come_from_the_fixture ... ok
+test server::program_tests::mid_command_dropout_drops_the_session_and_never_resumes ... ok
+test server::tests::session_drop_mid_pattern_zeroes_and_never_resumes ... ok
+test server::tests::serverapi_score_part_streams_and_stops_with_the_ensemble ... ok
+test server::tests::shutdown_at_eof_zeroes_active_output ... ok
+test server::tests::status_reports_both_providers ... ok
+test server::tests::stop_attempts_both_providers_even_when_one_zero_fails ... ok
+test server::tests::stop_is_available_and_idempotent_in_any_state ... ok
+test server::tests::stop_during_an_active_pattern_is_the_next_wire_command ... ok
+test server::tests::stop_zeroes_both_providers_and_cancels_the_pattern ... ok
+test server::tests::tools_list_is_exactly_the_served_tools_with_full_schemas ... ok
+test server::tests::transport_is_probed_for_status_and_not_discovered ... ok
+test server::tests::unified_device_query_returns_capabilities_as_data ... ok
+test server::tests::unified_discovery_merges_both_providers ... ok
+test server::tests::unified_lovense_device_routes_onto_the_legacy_wire ... ok
+test server::tests::unified_route_applies_reported_lovense_caps_legacy_route_unchanged ... ok
+test server::tests::unknown_and_malformed_device_ids_are_refused ... ok
+test server::tests::unreachable_target_is_a_structured_tool_error ... ok
+test server::tests::watchdog_expiry_zeroes_output_and_denies_until_rearmed ... ok
+test server::score_tests::validation_completion_zeroes_and_reports_idle ... ok
+test server::tests::watchdog_trip_zeroes_the_buttplug_provider_too ... ok
+test server::tests::watchdog_zero_attempts_both_providers_when_one_fails ... ok
+test service::tests::served_tools_serialize_back_to_the_baseline_definitions ... ok
+test service::tests::tool_result_conversion_keeps_text_and_error_flag ... ok
+test service::tests::tools_carry_the_served_names_and_annotations ... ok
+test session::tests::a2_pieces_legal_alone_but_over_the_session_bound_refuse_at_load ... ok
+test session::tests::a4_events_with_values_or_unregistered_names_are_refused ... ok
+test session::tests::a5_a_pack_missing_an_axis_on_the_device_loads_none ... ok
+test session::tests::a5_unresolvable_compositions_refuse_to_load ... ok
+test session::tests::v5_a_pack_binds_six_axes_and_streams_at_50_hz ... ok
+test session::tests::v5_conflicting_bindings_refuse_to_load ... ok
+test session::tests::v5_fan_out_drives_every_bound_function ... ok
+test state::tests::activity_inside_the_window_keeps_output_alive ... ok
+test state::tests::fresh_state_is_disarmed_and_inactive ... ok
+test state::tests::session_drop_zeroes_and_blocks_any_resume ... ok
+test state::tests::watchdog_cannot_fire_without_active_output ... ok
+test state::tests::watchdog_trips_once_and_latches_off ... ok
+test transport::tests::command_ack_accepts_only_code_200 ... ok
+test transport::tests::documented_string_shape_parses ... ok
+test transport::tests::from_config_maps_transport_and_target ... ok
+test transport::tests::hostile_toy_fields_are_bounded_or_dropped ... ok
+test server::tests::stub_malformed_json_is_a_structured_tool_error ... ok
+test transport::tests::malformed_answers_are_refused_without_panic ... ok
+test transport::tests::mock_discovers_fixture_and_records_requests ... ok
+test transport::tests::mock_injected_drop_records_the_attempt_and_errors ... ok
+test transport::tests::mock_records_sent_bodies_in_order ... ok
+test transport::tests::object_shape_and_string_battery_parse ... ok
+test transport::tests::http_error_status_is_app_error ... ok
+test transport::tests::oversized_response_is_refused ... ok
+test transport::tests::real_discovery_against_loopback_stub ... ok
+test transport::tests::reported_function_names_parse_in_both_shapes ... ok
+test transport::tests::stub_returning_malformed_json_is_response_invalid ... ok
+test transport::tests::unreachable_target_is_a_structured_error_not_an_empty_list ... ok
+test transport::tests::real_send_against_loopback_stub_posts_the_gate_body ... ok
+test server::score_tests::validation_concurrent_streams_interleave_before_any_part_finishes ... ok
+test server::tests::watchdog_fires_during_silence_without_a_next_request ... ok
+
+test result: ok. 261 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.06s
+
+
+running 2 tests
+test card_declares_no_a2a_endpoint_and_carries_invocation ... ok
+test card_and_server_json_agree_on_the_join_keys ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test legacy_initialize_is_refused_and_the_server_survives ... ok
+test eof_with_active_output_zeroes_and_reports_on_stderr ... ok
+test missing_config_file_exits_2 ... ok
+test garbage_on_stdin_never_kills_the_server ... ok
+test invalid_configs_exit_2_with_structured_error_and_no_panic ... ok
+test stdio_unified_surface_over_mock_and_fixture ... ok
+test stdio_smoke_over_mock_transport ... ok
+test valid_real_config_without_host_serves_unconfigured ... ok
+test watchdog_trips_during_silence_at_the_binary_level ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+
+       Fresh unicode-ident v1.0.27
+       Fresh cfg-if v1.0.5
+       Fresh memchr v2.8.3
+       Fresh once_cell v1.21.4
+       Fresh autocfg v1.5.1
+       Fresh pin-project-lite v0.2.17
+       Fresh futures-core v0.3.34
+       Fresh futures-sink v0.3.34
+       Fresh proc-macro2 v1.0.107
+       Fresh allocator-api2 v0.2.21
+       Fresh itoa v1.0.18
+       Fresh equivalent v1.0.3
+       Fresh foldhash v0.2.0
+       Fresh version_check v0.9.5
+       Fresh quote v1.0.47
+       Fresh serde_core v1.0.229
+       Fresh hashbrown v0.17.1
+       Fresh slab v0.4.12
+       Fresh futures-task v0.3.34
+       Fresh futures-io v0.3.34
+       Fresh bytes v1.12.1
+       Fresh syn v3.0.9
+       Fresh syn v2.0.119
+       Fresh num-traits v0.2.19
+       Fresh zmij v1.0.23
+       Fresh percent-encoding v2.3.2
+       Fresh regex-syntax v0.8.11
+       Fresh borrow-or-share v0.2.4
+       Fresh aho-corasick v1.1.5
+       Fresh serde_derive v1.0.229
+       Fresh futures-macro v0.3.34
+       Fresh displaydoc v0.2.7
+       Fresh ref-cast-impl v1.0.27
+       Fresh num-integer v0.1.47
+       Fresh libc v0.2.191
+       Fresh zerocopy v0.8.63
+       Fresh tokio-macros v2.7.2
+       Fresh num-complex v0.4.6
+       Fresh synstructure v0.14.0
+       Fresh thiserror-impl v2.0.21
+       Fresh regex-automata v0.4.18
+       Fresh strsim v0.11.1
+       Fresh serde v1.0.229
+       Fresh ref-cast v1.0.27
+       Fresh num-bigint v0.4.8
+       Fresh num-iter v0.1.46
+       Fresh thiserror v2.0.21
+       Fresh ident_case v1.0.1
+       Fresh heck v0.5.0
+       Fresh micromap v0.3.0
+       Fresh bytecount v0.6.9
+       Fresh fnv v1.0.7
+       Fresh num-cmp v0.1.0
+       Fresh bit-vec v0.8.0
+       Fresh zerofrom-derive v0.1.8
+       Fresh num-rational v0.4.2
+       Fresh smallvec v1.16.3
+       Fresh darling_core v0.20.11
+       Fresh bit-set v0.8.0
+       Fresh strum_macros v0.28.0
+       Fresh log v0.4.34
+       Fresh pkg-config v0.3.34
+       Fresh vsimd v0.8.0
+       Fresh typenum v1.20.1
+       Fresh outref v0.5.2
+       Fresh num v0.4.3
+       Fresh uuid-simd v0.8.0
+       Fresh unicode-general-category v1.1.0
+       Fresh darling_macro v0.20.11
+       Fresh fancy-regex v0.19.2
+       Fresh strum v0.28.0
+       Fresh hybrid-array v0.4.15
+       Fresh zerofrom v0.1.8
+       Fresh regex v1.13.1
+       Fresh yoke-derive v0.8.4
+       Fresh jsonschema-regex v0.56.0
+       Fresh mio v1.2.4
+       Fresh socket2 v0.6.5
+       Fresh fraction v0.17.0
+       Fresh scopeguard v1.2.0
+       Fresh stable_deref_trait v1.2.1
+       Fresh data-encoding v2.11.1
+       Fresh crossbeam-utils v0.8.23
+       Fresh darling v0.20.11
+       Fresh hashbrown v0.14.5
+       Fresh parking_lot_core v0.9.12
+       Fresh tracing-attributes v0.1.31
+       Fresh zerovec-derive v0.11.6
+       Fresh tracing-core v0.1.36
+       Fresh rand_core v0.10.1
+       Fresh yoke v0.8.3
+       Fresh derive_builder_core v0.20.2
+       Fresh lock_api v0.4.14
+       Fresh tracing v0.1.44
+       Fresh enumflags2_derive v0.7.12
+       Fresh async-stream-impl v0.3.6
+       Fresh getrandom v0.3.4
+       Fresh futures-channel v0.3.34
+       Fresh crypto-common v0.2.2
+       Fresh serde_repr v0.1.21
+       Fresh serde_json v1.0.154
+       Fresh zerovec v0.11.8
+       Fresh derive_builder_macro v0.20.2
+       Fresh futures-util v0.3.34
+       Fresh ahash v0.8.12
+       Fresh enumflags2 v0.7.12
+       Fresh async-stream v0.3.6
+       Fresh enum_dispatch v0.3.13
+       Fresh getset v0.1.7
+       Fresh either v1.19.0
+       Fresh parking_lot v0.12.5
+       Fresh fluent-uri v0.4.1
+       Fresh tokio v1.54.1
+       Fresh derive_builder v0.20.2
+       Fresh getrandom v0.4.3
+       Fresh futures-executor v0.3.34
+       Fresh tokio-util v0.7.20
+       Fresh tinystr v0.8.4
+       Fresh referencing v0.56.0
+       Fresh jsonschema-value v0.56.0
+       Fresh dashmap v6.2.1
+       Fresh block-padding v0.4.2
+       Fresh email_address v0.2.9
+       Fresh find-msvc-tools v0.1.15
+       Fresh litemap v0.8.3
+       Fresh uuid v1.29.0
+       Fresh futures v0.3.34
+       Fresh cpufeatures v0.3.1
+       Fresh ryu v1.0.23
+       Fresh writeable v0.6.4
+       Fresh unsafe-libyaml v0.2.11
+       Fresh shlex v2.0.1
+       Fresh jsonschema v0.56.0
+       Fresh inout v0.2.5
+       Fresh potential_utf v0.1.6
+       Fresh zerotrie v0.2.5
+       Fresh block-buffer v0.12.1
+       Fresh const-oid v0.10.2
+       Fresh serde_yaml v0.9.34+deprecated
+       Fresh cc v1.9.0
+       Fresh icu_locale_core v2.3.0
+       Fresh utf8_iter v1.0.4
+       Fresh buttplug_core v11.0.2
+       Fresh cipher v0.5.2
+       Fresh libdbus-sys v0.2.7
+       Fresh digest v0.11.3
+       Fresh itertools v0.14.0
+       Fresh zeroize v1.9.1
+       Fresh chacha20 v0.10.2
+       Fresh icu_collections v2.3.0
+       Fresh icu_provider v2.3.1
+       Fresh anyhow v1.0.104
+       Fresh dbus v0.9.12
+       Fresh rustls-pki-types v1.15.1
+       Fresh tokio-stream v0.1.19
+       Fresh derive_more-impl v2.1.1
+       Fresh async-trait v0.1.92
+       Fresh cpubits v0.1.1
+       Fresh bitflags v2.13.2
+       Fresh prost-derive v0.14.4
+       Fresh icu_properties_data v2.3.0
+       Fresh icu_normalizer_data v2.3.0
+       Fresh paste v1.0.15
+       Fresh aes v0.9.3
+       Fresh derive_more v2.1.1
+       Fresh ecb v0.2.1
+       Fresh rand v0.10.3
+       Fresh sha2 v0.11.1
+       Fresh md-5 v0.11.0
+       Fresh getrandom v0.2.17
+       Fresh instant v0.1.13
+       Fresh xml v1.4.0
+       Fresh buttplug_server_device_config v12.0.1
+       Fresh icu_normalizer v2.3.0
+       Fresh prost v0.14.4
+       Fresh icu_properties v2.3.0
+       Fresh byteorder v1.5.0
+       Fresh untrusted v0.9.0
+       Fresh regex-lite v0.1.9
+       Fresh serde-xml-rs v0.8.2
+       Fresh libudev-sys v0.1.4
+       Fresh bluez-generated v0.4.0
+       Fresh dbus-tokio v0.7.6
+       Fresh itertools v0.15.0
+       Fresh serde_derive_internals v0.30.0
+       Fresh indexmap v2.14.2
+       Fresh bitflags v1.3.2
+       Fresh ring v0.17.14
+       Fresh buttplug_server v12.0.2
+       Fresh idna_adapter v1.2.2
+       Fresh bluez-async v0.9.0
+       Fresh libudev v0.3.0
+       Fresh nix v0.26.4
+       Fresh schemars_derive v1.2.3
+       Fresh webpki-roots v1.0.10
+       Fresh chrono v0.4.45
+       Fresh serde_spanned v0.6.9
+       Fresh unescaper v0.1.10
+       Fresh toml_datetime v0.6.11
+       Fresh form_urlencoded v1.2.3
+       Fresh winnow v0.7.15
+       Fresh idna v1.1.0
+       Fresh rustls-webpki v0.103.16
+       Fresh static_assertions v1.1.0
+       Fresh dyn-clone v1.0.20
+       Fresh subtle v2.6.1
+       Fresh webpki-roots v0.26.11
+       Fresh toml_edit v0.22.27
+       Fresh serialport v4.10.1
+       Fresh buttplug_client v11.0.1
+       Fresh pastey v0.2.3
+       Fresh base64 v0.22.1
+       Fresh url v2.5.9
+       Fresh btleplug v0.13.5
+       Fresh schemars v1.2.3
+       Fresh rustls v0.23.46
+       Fresh toml v0.8.23
+       Fresh buttplug_server_hwmgr_serial v12.0.0
+       Fresh buttplug_client_in_process v12.0.4
+       Fresh ureq v2.12.1
+       Fresh rmcp v3.8.0
+       Fresh buttplug_server_hwmgr_btleplug v12.0.3
+       Fresh ache v1.4.0 (/home/phaedrus/.local/share/pax/ache-landings-20261125/wt/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running `/home/phaedrus/.local/share/pax/ache-landings-20261125/wt/mcp/target/debug/build/ache/2b8c938275f104ab/out/ache-2b8c938275f104ab --nocapture --test-threads=4`
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+ache: watchdog expired with output active; output zeroed, re-arm required
+     Running `/home/phaedrus/.local/share/pax/ache-landings-20261125/wt/mcp/target/debug/build/ache/cffc18ff750f7c03/out/manifest_agreement-cffc18ff750f7c03 --nocapture --test-threads=4`
+     Running `/home/phaedrus/.local/share/pax/ache-landings-20261125/wt/mcp/target/debug/build/ache/f90586269a1543d0/out/stdio_smoke-f90586269a1543d0 --nocapture --test-threads=4`

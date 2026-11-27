@@ -37,6 +37,9 @@ pub enum ProviderId {
     /// The Lovense Server API provider (D-1451): the cloud route,
     /// opt-in and off by default, behind the same gate.
     ServerApi,
+    /// The TCode multi-axis provider (KoiSync landing): opt-in, off by
+    /// default; axis frames only, through the program engine.
+    Tcode,
 }
 
 impl ProviderId {
@@ -45,6 +48,7 @@ impl ProviderId {
             ProviderId::Lovense => "lovense",
             ProviderId::Buttplug => "buttplug",
             ProviderId::ServerApi => "serverapi",
+            ProviderId::Tcode => "tcode",
         }
     }
 }

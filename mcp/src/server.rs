@@ -1,4 +1,4 @@
-//! The tool surface and dispatch core. Twelve tools. The original eight
+//! The tool surface and dispatch core. Sixteen tools. The original eight
 //! (`lovense_*`) keep their names and shapes: two read-only (status,
 //! toys) and six for the output core (arm, disarm, function, pattern,
 //! preset, stop). Two unified read-only tools (`ache_devices`,
@@ -8,7 +8,11 @@
 //! data; the output tools route to any provider when given a unified
 //! `device` id. `ache_pairing` serves the Server API provider's
 //! pairing surface (state, and an explicit QR request); it can cause
-//! no output. Every output, on any provider, passes the one
+//! no output. The four `ache_program_*` tools (1.4.0: the KoiSync and
+//! XToys landings) load frozen specs — patterns, funscripts and packs,
+//! depth curves, automations, sessions — and run, stop, and feed events
+//! to one program at a time; the TCode provider joins the other three.
+//! Every output, on any provider, passes the one
 //! `decide()` gate in `decide.rs` before anything can reach a device.
 //! Protocol misuse (bad arguments) is a JSON-RPC error; an operational
 //! failure (no target, unreachable app, a gate deny) is a tool result
@@ -21,21 +25,34 @@
 //! definitions (served raw, unchanged), and the safety state.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
+use crate::automation::{Automation, Event, TICK_MS};
 use crate::config::{Config, TransportKind};
 use crate::decide::{
     AllowedOutput, Decision, Feature, FunctionIntent, OutputIntent, PatternIntent, PresetIntent,
     ScorePart, TOY_ID_BYTES_MAX, decide, decide_plan, decide_score, lovense_wire,
 };
 use crate::error::{AcheError, ErrorCode};
+use crate::pattern::{Function, Pattern};
 use crate::provider::{Device, DeviceProvider, InertProvider, LovenseProvider, ProviderId};
 use crate::provider_server_api::{NoPairing, PairingProvider};
+use crate::provider_tcode::TcodeProvider;
 use crate::rumble::{self, RumbleEvent};
+use crate::session::{
+    AxisView, CompiledSession, Gated, Library, SESSION_FORMAT, SessionRun, artefact_line,
+    gate_proposed, seed_library,
+};
 use crate::state::SafetyState;
 use crate::transport::Transport;
+
+/// Most specs of one kind the library holds.
+const LIBRARY_ENTRIES_MAX: usize = 128;
+/// Most events waiting for the next program tick.
+const PROGRAM_EVENTS_QUEUED_MAX: usize = 64;
 
 pub const SERVER_NAME: &str = "ache";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -47,7 +64,7 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// Every tool the server serves, in `tools/list` order. The original
 /// eight keep their positions; the unified tools append.
-pub(crate) const TOOL_NAMES: [&str; 12] = [
+pub(crate) const TOOL_NAMES: [&str; 16] = [
     "lovense_status",
     "lovense_toys",
     "lovense_arm",
@@ -60,6 +77,10 @@ pub(crate) const TOOL_NAMES: [&str; 12] = [
     "ache_device",
     "ache_score_start",
     "ache_pairing",
+    "ache_program_load",
+    "ache_program_run",
+    "ache_program_stop",
+    "ache_program_event",
 ];
 
 pub struct Server {
@@ -90,12 +111,75 @@ pub struct Server {
     /// Devices the rumble mappings resolved to, cached so a tick never
     /// waits on a discovery scan twice; cleared by every stop path.
     rumble_targets: Mutex<std::collections::BTreeMap<String, Device>>,
+    /// The TCode provider (KoiSync landing): disabled unless wired.
+    tcode: Arc<TcodeProvider>,
+    /// Loaded frozen specs, seeded with the estate library.
+    library: Mutex<Library>,
+    /// The current (or last) program run.
+    program: Mutex<Option<Arc<ProgramRun>>>,
 }
 
 struct ScoreRun {
     cancelled: Mutex<bool>,
     wake: Condvar,
     remaining: Mutex<usize>,
+}
+
+/// One running program: a compiled session, its pending events, and
+/// its run artefact (D-713: numbers from the run, not from belief).
+struct ProgramRun {
+    cancelled: Mutex<bool>,
+    wake: Condvar,
+    events: Mutex<Vec<Event>>,
+    session: Arc<CompiledSession>,
+    report: Mutex<ProgramReport>,
+}
+
+#[derive(Default)]
+struct ProgramReport {
+    t_ms: u64,
+    commands: u64,
+    clamps: u64,
+    lines: u64,
+    hasher: Sha256,
+    stream_hash: Option<String>,
+    stop_reason: Option<String>,
+    log: Vec<String>,
+}
+
+impl ProgramReport {
+    fn record(&mut self, line: &str, clamps: u32) {
+        if self.lines > 0 {
+            self.hasher.update(b"\n");
+        }
+        self.hasher.update(line.as_bytes());
+        self.lines += 1;
+        self.commands += 1;
+        self.clamps += u64::from(clamps);
+    }
+
+    fn finish(&mut self, reason: String, log: Vec<String>) {
+        if self.stop_reason.is_none() {
+            self.stop_reason = Some(reason);
+        }
+        let digest = std::mem::take(&mut self.hasher).finalize();
+        self.stream_hash = Some(digest.iter().map(|b| format!("{b:02x}")).collect());
+        self.log = log;
+    }
+
+    fn to_json(&self, session: &CompiledSession) -> Value {
+        json!({
+            "session": session.id,
+            "session_hash": session.hash,
+            "duration_ms": session.duration_ms,
+            "t_ms": self.t_ms,
+            "commands": self.commands,
+            "clamps": self.clamps,
+            "stop_reason": self.stop_reason,
+            "stream_hash": self.stream_hash,
+            "log": self.log,
+        })
+    }
 }
 
 /// A tool dispatch failure: protocol misuse is answered with a JSON-RPC
@@ -146,7 +230,19 @@ impl Server {
             score: Mutex::new(None),
             rumble: Mutex::new(rumble),
             rumble_targets: Mutex::new(std::collections::BTreeMap::new()),
+            tcode: Arc::new(TcodeProvider::disabled()),
+            library: Mutex::new(
+                seed_library().expect("the seed library validates (session::tests gate it)"),
+            ),
+            program: Mutex::new(None),
         }
+    }
+
+    /// Wire the TCode provider behind the seam (KoiSync landing).
+    #[must_use]
+    pub fn with_tcode(mut self, tcode: TcodeProvider) -> Server {
+        self.tcode = Arc::new(tcode);
+        self
     }
 
     /// Wire the Buttplug provider behind the seam.
@@ -186,6 +282,7 @@ impl Server {
         self.lovense.target_configured()
             || self.buttplug.probe().available
             || self.server_api.probe().available
+            || self.tcode.probe().available
     }
 
     fn snapshot(&self) -> crate::decide::GateSnapshot {
@@ -219,6 +316,49 @@ impl Server {
 
     fn dispatch(&self, name: &str, arguments: Option<&Value>) -> Result<Value, CallError> {
         match name {
+            "ache_program_load" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["kind", "spec", "id", "function"])?;
+                let kind = required_string(&args, "kind")?;
+                let spec = args
+                    .get("spec")
+                    .filter(|v| v.is_object())
+                    .cloned()
+                    .ok_or((INVALID_PARAMS, "`spec` must be an object".to_string()))?;
+                let id = optional_string(&args, "id")?;
+                let function = optional_string(&args, "function")?;
+                Ok(self.program_load(&kind, &spec, id.as_deref(), function.as_deref())?)
+            }
+            "ache_program_run" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["session", "pattern", "pack", "device", "function"])?;
+                let pick = |name: &str| optional_string(&args, name);
+                Ok(self.program_run(
+                    pick("session")?.as_deref(),
+                    pick("pattern")?.as_deref(),
+                    pick("pack")?.as_deref(),
+                    pick("device")?.as_deref(),
+                    pick("function")?.as_deref(),
+                )?)
+            }
+            "ache_program_stop" => {
+                check_no_arguments(arguments)?;
+                Ok(self.program_stop()?)
+            }
+            "ache_program_event" => {
+                let args = arguments_object(arguments)?;
+                check_fields_allowed(&args, &["kind", "name", "value"])?;
+                let kind = required_string(&args, "kind")?;
+                let name = required_string(&args, "name")?;
+                let value = match args.get("value") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(
+                        v.as_f64()
+                            .ok_or((INVALID_PARAMS, "`value` must be a number".to_string()))?,
+                    ),
+                };
+                Ok(self.program_event(&kind, &name, value)?)
+            }
             "ache_score_start" => {
                 let args = arguments_object(arguments)?;
                 check_fields_allowed(&args, &["parts"])?;
@@ -333,8 +473,15 @@ impl Server {
         let score_running = self.score.lock().unwrap().as_ref().is_some_and(|run| {
             !*run.cancelled.lock().unwrap() && *run.remaining.lock().unwrap() > 0
         });
+        let program = self.program.lock().unwrap().as_ref().map(|run| {
+            let report = run.report.lock().unwrap();
+            let mut value = report.to_json(&run.session);
+            value["running"] = json!(report.stop_reason.is_none());
+            value
+        });
         let safety = self.lock_state();
         json!({
+            "program": program,
             "score_running": score_running,
             "state": state,
             "transport": self.config.transport.as_str(),
@@ -354,6 +501,7 @@ impl Server {
                 "lovense": self.lovense.probe().to_json(),
                 "buttplug": self.buttplug.probe().to_json(),
                 "serverapi": self.server_api.probe().to_json(),
+                "tcode": self.tcode.probe().to_json(),
             },
             "server": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
@@ -390,6 +538,7 @@ impl Server {
             self.lovense.as_ref() as &dyn DeviceProvider,
             self.buttplug.as_ref() as &dyn DeviceProvider,
             self.server_api.as_ref() as &dyn DeviceProvider,
+            self.tcode.as_ref() as &dyn DeviceProvider,
         ] {
             let probe = provider.probe();
             let mut entry = Map::new();
@@ -471,11 +620,13 @@ impl Server {
             self.buttplug.as_ref()
         } else if id.starts_with("serverapi:") {
             self.server_api.as_ref()
+        } else if id.starts_with("tcode:") {
+            self.tcode.as_ref()
         } else {
             return Err(AcheError::new(
                 ErrorCode::RequestInvalid,
                 format!(
-                    "device id {id:?} must start with `lovense:`, `buttplug:`, or `serverapi:`"
+                    "device id {id:?} must start with `lovense:`, `buttplug:`, `serverapi:`, or `tcode:`"
                 ),
             ));
         };
@@ -560,14 +711,19 @@ impl Server {
     fn send_stop_strict(&self) -> Result<bool, AcheError> {
         self.cancel_score();
         self.reset_rumble();
+        self.cancel_program();
         let lovense = self.lovense.zero();
         let buttplug = self.buttplug.zero();
         let server_api = self.server_api.zero();
-        match (lovense, buttplug, server_api) {
-            (Ok(lovense_sent), Ok(buttplug_sent), Ok(server_api_sent)) => {
-                Ok(lovense_sent || buttplug_sent || server_api_sent)
+        let tcode = self.tcode.zero();
+        match (lovense, buttplug, server_api, tcode) {
+            (Ok(lovense_sent), Ok(buttplug_sent), Ok(server_api_sent), Ok(tcode_sent)) => {
+                Ok(lovense_sent || buttplug_sent || server_api_sent || tcode_sent)
             }
-            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            (Err(error), _, _, _)
+            | (_, Err(error), _, _)
+            | (_, _, Err(error), _)
+            | (_, _, _, Err(error)) => {
                 self.lock_state().on_session_drop();
                 Err(error)
             }
@@ -582,10 +738,12 @@ impl Server {
     fn send_stop_best_effort(&self) {
         self.cancel_score();
         self.reset_rumble();
+        self.cancel_program();
         let lovense_failed = self.lovense.zero().is_err();
         let buttplug_failed = self.buttplug.zero().is_err();
         let server_api_failed = self.server_api.zero().is_err();
-        if lovense_failed || buttplug_failed || server_api_failed {
+        let tcode_failed = self.tcode.zero().is_err();
+        if lovense_failed || buttplug_failed || server_api_failed || tcode_failed {
             self.lock_state().on_session_drop();
         }
     }
@@ -605,6 +763,12 @@ impl Server {
             return Err(AcheError::new(
                 ErrorCode::RequestInvalid,
                 "stop the running score before other output",
+            ));
+        }
+        if self.program_running() {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "stop the running program before other output",
             ));
         }
         let snapshot = self.snapshot();
@@ -675,6 +839,13 @@ impl Server {
                     }),
                 )
             }
+            // The gate already refuses every function/pattern/preset on
+            // a TCode device (its capabilities are axes); this arm is a
+            // second refusal, never a session drop.
+            ProviderId::Tcode => Err(AcheError::new(
+                ErrorCode::CapabilityUnsupported,
+                "tcode devices take axis frames from ache_program_run only",
+            )),
         }
     }
 
@@ -693,7 +864,7 @@ impl Server {
 
     fn start_score(&self, parts: &[ScorePart]) -> Result<Value, AcheError> {
         let _output = self.output_lock.lock().unwrap();
-        if self.lock_state().output_active() {
+        if self.lock_state().output_active() || self.program_running() {
             return Err(AcheError::new(
                 ErrorCode::RequestInvalid,
                 "stop active output before starting a score",
@@ -708,7 +879,7 @@ impl Server {
                     ProviderId::ServerApi => {
                         device.id.strip_prefix("serverapi:").unwrap().to_string()
                     }
-                    ProviderId::Buttplug => device.id.clone(),
+                    ProviderId::Buttplug | ProviderId::Tcode => device.id.clone(),
                 };
                 targets.push((device.id.clone(), selector, device.caps()));
                 devices.push(device);
@@ -743,6 +914,7 @@ impl Server {
                 ProviderId::Lovense => self.lovense.clone(),
                 ProviderId::Buttplug => self.buttplug.clone(),
                 ProviderId::ServerApi => self.server_api.clone(),
+                ProviderId::Tcode => self.tcode.clone(),
             };
             let run = run.clone();
             let output_lock = self.output_lock.clone();
@@ -834,6 +1006,287 @@ impl Server {
             }
         }
         Ok(json!({"gate": {"decision": "allow"}, "parts": verdict, "started": true}))
+    }
+
+    // ------------------------------------------------ program engine
+
+    fn cancel_program(&self) {
+        if let Some(run) = self.program.lock().unwrap().as_ref() {
+            *run.cancelled.lock().unwrap() = true;
+            run.wake.notify_all();
+        }
+    }
+
+    fn program_running(&self) -> bool {
+        self.program.lock().unwrap().as_ref().is_some_and(|run| {
+            !*run.cancelled.lock().unwrap() && run.report.lock().unwrap().stop_reason.is_none()
+        })
+    }
+
+    /// Every device any provider reports now; a provider that cannot
+    /// enumerate contributes nothing (the session then names a device
+    /// that is absent, which refuses by name).
+    fn all_devices(&self) -> Vec<Device> {
+        [
+            self.lovense.as_ref() as &dyn DeviceProvider,
+            self.buttplug.as_ref() as &dyn DeviceProvider,
+            self.server_api.as_ref() as &dyn DeviceProvider,
+            self.tcode.as_ref() as &dyn DeviceProvider,
+        ]
+        .iter()
+        .filter_map(|p| p.discover().ok())
+        .flatten()
+        .collect()
+    }
+
+    /// Load one frozen spec into the library. Loading validates and
+    /// hashes; it can cause no output and is safe while disarmed.
+    fn program_load(
+        &self,
+        kind: &str,
+        spec: &Value,
+        id: Option<&str>,
+        function: Option<&str>,
+    ) -> Result<Value, AcheError> {
+        let refuse = |m: &str| Err(AcheError::new(ErrorCode::RequestInvalid, m.to_string()));
+        if (id.is_some() || function.is_some()) && kind != "funscript" {
+            return refuse("`id` and `function` apply to kind funscript only");
+        }
+        let mut library = self.library.lock().unwrap();
+        let full = |n: usize| n >= LIBRARY_ENTRIES_MAX;
+        let pattern_entry = |library: &mut Library, p: Pattern| -> Result<Value, AcheError> {
+            if full(library.patterns.len()) && !library.patterns.contains_key(p.id()) {
+                return Err(AcheError::new(
+                    ErrorCode::RequestInvalid,
+                    "the pattern library is full",
+                ));
+            }
+            let value = json!({"kind": "pattern", "id": p.id(), "hash": p.hash(),
+                "function": p.function().as_str(), "total_ms": p.total_ms()});
+            library.patterns.insert(p.id().to_string(), p);
+            Ok(value)
+        };
+        match kind {
+            "pattern" => pattern_entry(&mut library, Pattern::from_json(spec)?),
+            "depth" => pattern_entry(&mut library, crate::provider_tcode::depth_pattern(spec)?),
+            "funscript" => {
+                let (Some(id), Some(function)) = (id, function) else {
+                    return refuse("kind funscript needs `id` and `function`");
+                };
+                let function = Function::parse(function)?;
+                pattern_entry(&mut library, crate::funscript::import(id, function, spec)?)
+            }
+            "pack" => {
+                let pack = crate::funscript::import_pack(spec)?;
+                if full(library.packs.len()) && !library.packs.contains_key(&pack.id) {
+                    return refuse("the pack library is full");
+                }
+                let value = json!({"kind": "pack", "id": pack.id, "hash": pack.hash,
+                    "total_ms": pack.total_ms,
+                    "channels": pack.channels.iter().map(|c| c.function.as_str()).collect::<Vec<_>>()});
+                library.packs.insert(pack.id.clone(), pack);
+                Ok(value)
+            }
+            "automation" => {
+                let a = Automation::from_json(spec)?;
+                if full(library.automations.len()) && !library.automations.contains_key(a.id()) {
+                    return refuse("the automation library is full");
+                }
+                let value = json!({"kind": "automation", "id": a.id(), "hash": a.hash(),
+                    "controls": a.control_ids()});
+                library.automations.insert(a.id().to_string(), a);
+                Ok(value)
+            }
+            "session" => {
+                drop(library);
+                let devices = self.all_devices();
+                let library_guard = self.library.lock().unwrap();
+                let compiled = CompiledSession::compile(spec, &library_guard, &devices)?;
+                drop(library_guard);
+                let mut library = self.library.lock().unwrap();
+                if full(library.sessions.len()) && !library.sessions.contains_key(&compiled.id) {
+                    return refuse("the session library is full");
+                }
+                library.sessions.insert(compiled.id.clone(), spec.clone());
+                Ok(
+                    json!({"kind": "session", "id": compiled.id, "hash": compiled.hash,
+                    "duration_ms": compiled.duration_ms,
+                    "lanes": compiled.lanes.iter().map(|l| l.binding.clone()).collect::<Vec<_>>()}),
+                )
+            }
+            other => Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                format!(
+                    "kind {other:?} must be pattern, funscript, pack, depth, automation, or session"
+                ),
+            )),
+        }
+    }
+
+    /// Start one program: a loaded session, or one pattern / pack on one
+    /// device (a one-binding session). Requires the armed state; the
+    /// program then runs until its bound, a stop, a watchdog trip (the
+    /// heartbeat is required, as for scores), or a session drop.
+    fn program_run(
+        &self,
+        session: Option<&str>,
+        pattern: Option<&str>,
+        pack: Option<&str>,
+        device: Option<&str>,
+        function: Option<&str>,
+    ) -> Result<Value, AcheError> {
+        let refuse = |m: String| Err(AcheError::new(ErrorCode::RequestInvalid, m));
+        let spec = {
+            let library = self.library.lock().unwrap();
+            match (session, pattern, pack, device) {
+                (Some(id), None, None, None) if function.is_none() => {
+                    match library.sessions.get(id) {
+                        Some(spec) => spec.clone(),
+                        None => return refuse(format!("session {id:?} is not loaded")),
+                    }
+                }
+                (None, Some(id), None, Some(device)) => {
+                    let Some(p) = library.patterns.get(id) else {
+                        return refuse(format!("pattern {id:?} is not loaded"));
+                    };
+                    let bound = match function {
+                        Some(f) => Function::parse(f)?,
+                        None if p.function() == Function::Generic => {
+                            return refuse("a Generic pattern needs `function`".into());
+                        }
+                        None => p.function(),
+                    };
+                    json!({"format": SESSION_FORMAT, "id": format!("run.{id}"), "duration_ms": p.total_ms(),
+                        "bindings": [{"id": "main", "device": device, "function": bound, "source": {"pattern": id}}]})
+                }
+                (None, None, Some(id), Some(device)) if function.is_none() => {
+                    let Some(p) = library.packs.get(id) else {
+                        return refuse(format!("pack {id:?} is not loaded"));
+                    };
+                    json!({"format": SESSION_FORMAT, "id": format!("run.{id}"), "duration_ms": p.total_ms,
+                        "bindings": [{"id": "main", "device": device, "source": {"pack": id}}]})
+                }
+                _ => {
+                    return refuse(
+                        "give `session`, or `pattern` + `device` (+ `function`), or `pack` + `device`".into(),
+                    );
+                }
+            }
+        };
+        let devices = self.all_devices();
+        let compiled = {
+            let library = self.library.lock().unwrap();
+            Arc::new(CompiledSession::compile(&spec, &library, &devices)?)
+        };
+        let _output = self.output_lock.lock().unwrap();
+        if self.score_running() || self.program_running() || self.lock_state().output_active() {
+            return refuse("stop active output before starting a program".into());
+        }
+        // The state half of the gate, up front: the same refusal every
+        // command would meet, before a thread exists.
+        let snapshot = self.snapshot();
+        if !snapshot.target_configured {
+            return Err(AcheError::new(
+                ErrorCode::TargetUnconfigured,
+                "no target is configured; output is impossible",
+            ));
+        }
+        if !snapshot.armed {
+            return Err(AcheError::new(
+                ErrorCode::NotArmed,
+                "the master toggle is off; call lovense_arm first (arming is always explicit)",
+            ));
+        }
+        let run = Arc::new(ProgramRun {
+            cancelled: Mutex::new(false),
+            wake: Condvar::new(),
+            events: Mutex::new(Vec::new()),
+            session: Arc::clone(&compiled),
+            report: Mutex::new(ProgramReport::default()),
+        });
+        *self.program.lock().unwrap() = Some(Arc::clone(&run));
+        self.lock_state().mark_output_started();
+        let worker = ProgramWorker {
+            run: Arc::clone(&run),
+            output_lock: Arc::clone(&self.output_lock),
+            state: Arc::clone(&self.state),
+            ceiling: self.config.intensity_ceiling,
+            lovense: Arc::clone(&self.lovense),
+            buttplug: Arc::clone(&self.buttplug),
+            server_api: Arc::clone(&self.server_api),
+            tcode: Arc::clone(&self.tcode),
+        };
+        if let Err(error) = std::thread::Builder::new()
+            .name("ache-program".into())
+            .spawn(move || worker.run())
+        {
+            run.report
+                .lock()
+                .unwrap()
+                .finish(format!("worker failed: {error}"), Vec::new());
+            self.lock_state().on_session_drop();
+            self.send_stop_best_effort();
+            return refuse(format!("program worker failed: {error}"));
+        }
+        Ok(json!({
+            "started": true,
+            "gate": {"decision": "allow"},
+            "session": compiled.id,
+            "session_hash": compiled.hash,
+            "duration_ms": compiled.duration_ms,
+            "lanes": compiled.lanes.iter().map(|l| json!({
+                "binding": l.binding, "device": compiled.devices[l.device].id,
+                "function": l.function.as_str()})).collect::<Vec<_>>(),
+            "note": "heartbeat required: any tool call within the watchdog window keeps the \
+                program alive; silence trips the watchdog and zeroes every output",
+        }))
+    }
+
+    /// Stop the program: ache's synchronous stop (every output zeroed,
+    /// master latched off), then the run artefact.
+    fn program_stop(&self) -> Result<Value, AcheError> {
+        let stop_sent = self.zero_output("program stop: output zeroed")?;
+        let run = self.program.lock().unwrap().clone();
+        Ok(json!({
+            "armed": false,
+            "output_active": false,
+            "stop_sent": stop_sent,
+            "program": run.map(|run| run.report.lock().unwrap().to_json(&run.session)),
+        }))
+    }
+
+    /// Feed one named event to the running program. A stop input or the
+    /// stop button is ache's synchronous stop, here and now — it never
+    /// waits for a tick and no program can intercept it.
+    fn program_event(
+        &self,
+        kind: &str,
+        name: &str,
+        value: Option<f64>,
+    ) -> Result<Value, AcheError> {
+        let run = self.program.lock().unwrap().clone();
+        let Some(run) = run.filter(|_| self.program_running()) else {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "no program is running",
+            ));
+        };
+        let stop = (kind == "external" && value.is_none() && run.session.is_stop_input(name))
+            || (kind == "press" && value.is_none() && run.session.is_stop_control(name));
+        if stop {
+            let stop_sent = self.zero_output("stop input: output zeroed")?;
+            return Ok(json!({"stopped": true, "stop_sent": stop_sent, "armed": false}));
+        }
+        let event = run.session.event(kind, name, value)?;
+        let mut events = run.events.lock().unwrap();
+        if events.len() >= PROGRAM_EVENTS_QUEUED_MAX {
+            return Err(AcheError::new(
+                ErrorCode::RequestInvalid,
+                "too many events are waiting for the next tick",
+            ));
+        }
+        events.push(event);
+        Ok(json!({"queued": true, "delivered_at": "the next 250 ms program tick"}))
     }
 
     /// The shared tail of every output path: on success the output is
@@ -1015,6 +1468,160 @@ impl Server {
     }
 }
 
+/// The live executor of one program. It walks the pure `SessionRun` on
+/// the wall clock (deadline-based, so it does not drift), and for every
+/// proposal takes the output lock, re-reads the safety state, passes
+/// the proposal through the gate, and only then hands the plan to its
+/// provider. A stop takes the same lock, so once a stop returns no
+/// program command can follow it.
+struct ProgramWorker {
+    run: Arc<ProgramRun>,
+    output_lock: Arc<Mutex<()>>,
+    state: Arc<Mutex<SafetyState>>,
+    ceiling: u8,
+    lovense: Arc<LovenseProvider>,
+    buttplug: Arc<dyn DeviceProvider>,
+    server_api: Arc<dyn DeviceProvider>,
+    tcode: Arc<TcodeProvider>,
+}
+
+enum Halt {
+    Stopped,
+    Finished(String),
+    Denied(AcheError),
+    Dropped(AcheError),
+}
+
+impl ProgramWorker {
+    fn cancelled(&self) -> bool {
+        *self.run.cancelled.lock().unwrap()
+    }
+
+    fn zero_all(&self) -> bool {
+        let failed = [
+            self.lovense.zero().is_err(),
+            self.buttplug.zero().is_err(),
+            self.server_api.zero().is_err(),
+            self.tcode.zero().is_err(),
+        ];
+        failed.iter().any(|f| *f)
+    }
+
+    fn execute(&self, gated: &Gated) -> Result<(), AcheError> {
+        match gated {
+            Gated::Output { provider, plan, .. } => match provider {
+                ProviderId::Lovense => self.lovense.send_gate_body(&lovense_wire(plan).0),
+                ProviderId::Buttplug => self.buttplug.execute(plan),
+                ProviderId::ServerApi => self.server_api.execute(plan),
+                ProviderId::Tcode => self.tcode.execute(plan),
+            },
+            Gated::Axes { frame, .. } => self.tcode.execute_axes(frame),
+        }
+    }
+
+    fn run(self) {
+        let session = Arc::clone(&self.run.session);
+        let mut run = SessionRun::new(&session);
+        let start = Instant::now();
+        let halt = loop {
+            // Wait for this quantum's deadline, waking at once on a stop.
+            let due = start + Duration::from_millis(run.time_ms());
+            {
+                let mut cancelled = self.run.cancelled.lock().unwrap();
+                while !*cancelled {
+                    let now = Instant::now();
+                    if now >= due {
+                        break;
+                    }
+                    cancelled = self.run.wake.wait_timeout(cancelled, due - now).unwrap().0;
+                }
+            }
+            let _output = self.output_lock.lock().unwrap();
+            if self.cancelled() {
+                break Halt::Stopped;
+            }
+            let t = run.time_ms();
+            let events = if t.is_multiple_of(TICK_MS) {
+                std::mem::take(&mut *self.run.events.lock().unwrap())
+            } else {
+                Vec::new()
+            };
+            let Some(proposals) = run.step(&events) else {
+                break Halt::Finished(run.stop_reason.clone().unwrap_or_else(|| "complete".into()));
+            };
+            let snapshot = self.state.lock().unwrap().snapshot(true, self.ceiling);
+            let mut halt = None;
+            for proposed in &proposals {
+                let view = AxisView {
+                    supported: self.tcode.kind().axes(),
+                    limits: self.tcode.limits(),
+                    last: self.tcode.last(),
+                };
+                let gated = match gate_proposed(&session, proposed, &snapshot, Some(&view)) {
+                    Ok(gated) => gated,
+                    Err(error) => {
+                        halt = Some(Halt::Denied(error));
+                        break;
+                    }
+                };
+                if let Err(error) = self.execute(&gated) {
+                    halt = Some(Halt::Dropped(error));
+                    break;
+                }
+                let clamps = match &gated {
+                    Gated::Output { plan, .. } => u32::from(plan.clamped()),
+                    Gated::Axes { frame, .. } => frame.clamps,
+                };
+                self.run
+                    .report
+                    .lock()
+                    .unwrap()
+                    .record(&artefact_line(&session, t, &gated), clamps);
+            }
+            self.run.report.lock().unwrap().t_ms = t;
+            if let Some(halt) = halt {
+                break halt;
+            }
+        };
+        // Whoever stopped us already zeroed every provider under the
+        // output lock; every other ending zeroes here, under it.
+        let reason = match halt {
+            Halt::Stopped => "stopped".to_string(),
+            Halt::Finished(reason) => {
+                let _output = self.output_lock.lock().unwrap();
+                if !self.cancelled() {
+                    if self.zero_all() {
+                        self.state.lock().unwrap().on_session_drop();
+                    } else {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .zero_and_disarm("program completed; re-arm required");
+                    }
+                }
+                reason
+            }
+            Halt::Denied(error) => {
+                let _output = self.output_lock.lock().unwrap();
+                self.zero_all();
+                self.state
+                    .lock()
+                    .unwrap()
+                    .zero_and_disarm("program halted by the gate; re-arm required");
+                format!("gate_denied: {}: {}", error.code.as_str(), error.message)
+            }
+            Halt::Dropped(error) => {
+                let _output = self.output_lock.lock().unwrap();
+                self.state.lock().unwrap().on_session_drop();
+                self.zero_all();
+                format!("session_drop: {}", error.message)
+            }
+        };
+        *self.run.cancelled.lock().unwrap() = true;
+        self.run.report.lock().unwrap().finish(reason, run.log());
+    }
+}
+
 /// Aim an intent at a resolved unified device: the gate's target
 /// selector becomes the device's own id space — the raw toy id for a
 /// Lovense device (what its wire expects), the unified id for a
@@ -1032,7 +1639,7 @@ fn retarget(intent: OutputIntent, device: &Device) -> OutputIntent {
             .strip_prefix("serverapi:")
             .unwrap_or(&device.id)
             .to_string(),
-        ProviderId::Buttplug => device.id.clone(),
+        ProviderId::Buttplug | ProviderId::Tcode => device.id.clone(),
     };
     match intent {
         OutputIntent::Function(mut intent) => {
@@ -1138,6 +1745,75 @@ pub(crate) fn tool_list() -> Value {
                     }}}}
         },
         "annotations": {"title": "Start score", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+    });
+    let program_load = json!({
+        "name": "ache_program_load",
+        "description": "Load one frozen spec into the program library: validated whole, \
+            hashed, never executed. kind: pattern (ache.pattern/v1: Square/Linear/Sine \
+            blocks or a bounded scripted expression), funscript (a .funscript document, \
+            with `id` and `function`), pack (ache.pack/v1: the KoiSync six-axis funscript \
+            pack), depth (ache.depth/v1: a depth curve and calibration, compiled to an L0 \
+            pattern), automation (ache.automation/v1: closed triggers/actions, bounded \
+            jobs and queues, typed clamped variables, a mandatory stop button), or \
+            session (ache.session/v1: device/function/source bindings, checked against \
+            the devices present now). Any rule violation refuses the whole spec. Causes \
+            no output; safe while disarmed.",
+        "inputSchema": {"type": "object", "additionalProperties": false, "required": ["kind", "spec"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["pattern", "funscript", "pack", "depth", "automation", "session"]},
+                "spec": {"type": "object", "description": "The spec document."},
+                "id": {"type": "string", "description": "funscript only: the pattern id to create."},
+                "function": {"type": "string",
+                    "enum": Function::ALL.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+                    "description": "funscript only: the function the pattern drives."}
+            }},
+        "annotations": {"title": "Load program spec", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    });
+    let program_run = json!({
+        "name": "ache_program_run",
+        "description": "Run one program: a loaded `session`, or a loaded `pattern` on one \
+            `device` (+ `function` for a Generic pattern), or a loaded `pack` on one TCode \
+            `device`. Requires the armed state. Every command the program proposes passes \
+            the decide() gate at emission time (ceiling clamp, per-axis windows and slew); \
+            feature lanes evaluate every 250 ms, TCode axes stream at 50 Hz. Heartbeat \
+            required: tool-call silence past the watchdog window zeroes everything. One \
+            program at a time; stop active output first. Stop with ache_program_stop or \
+            lovense_stop.",
+        "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+            "session": {"type": "string"}, "pattern": {"type": "string"}, "pack": {"type": "string"},
+            "device": {"type": "string", "description": "Unified device id, e.g. \"buttplug:0\" or \"tcode:0\"."},
+            "function": {"type": "string", "enum": Function::ALL.iter().map(|f| f.as_str()).collect::<Vec<_>>()}
+        }},
+        "annotations": {"title": "Run program", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+    });
+    let program_stop = json!({
+        "name": "ache_program_stop",
+        "description": "Stop the running program with ache's synchronous stop: every output \
+            on every provider zeroed (TCode devices get DSTOP), the master latched off, then \
+            the run artefact (commands, clamps, stop reason, stream hash). Always available.",
+        "inputSchema": no_arguments.clone(),
+        "annotations": {"title": "Stop program", "readOnlyHint": false,
+            "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}
+    });
+    let program_event = json!({
+        "name": "ache_program_event",
+        "description": "Send one named event to the running program: a control (kind \
+            press/release/toggle, or slider with `value`, clamped to the variable's range) \
+            or an external input (kind external) the session pre-registered, or a device \
+            presence report (toy_connected / toy_disconnected, by kind name) — a name and \
+            no value; intensities never arrive from outside. A session stop input or the \
+            automation's stop button is ache's synchronous stop, applied at once. Other \
+            events are delivered at the next 250 ms tick.",
+        "inputSchema": {"type": "object", "additionalProperties": false, "required": ["kind", "name"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["press", "release", "toggle", "slider", "external", "toy_connected", "toy_disconnected"]},
+                "name": {"type": "string"},
+                "value": {"type": "number", "description": "slider only."}
+            }},
+        "annotations": {"title": "Program event", "readOnlyHint": false,
             "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
     });
     json!([
@@ -1395,6 +2071,10 @@ pub(crate) fn tool_list() -> Value {
                 "openWorldHint": true,
             },
         },
+        program_load,
+        program_run,
+        program_stop,
+        program_event,
     ])
 }
 
@@ -1506,7 +2186,7 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-/// Whether `name` is one of the twelve served tools. The era guard
+/// Whether `name` is one of the sixteen served tools. The era guard
 /// asks before forwarding a `tools/call`; dispatch trusts it.
 pub(crate) fn is_known_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
@@ -1582,7 +2262,7 @@ mod tests {
     // --- validation ---------------------------------------------------
 
     #[test]
-    fn tools_list_is_exactly_the_twelve_tools_with_full_schemas() {
+    fn tools_list_is_exactly_the_served_tools_with_full_schemas() {
         let listed = tool_list();
         let tools = listed.as_array().unwrap();
         let names: Vec<&str> = tools
@@ -1634,7 +2314,7 @@ mod tests {
         assert_eq!(status["session_health"], "ok");
         assert_eq!(status["intensity_ceiling"], 20);
         assert_eq!(status["watchdog_secs"], 5);
-        assert_eq!(status["server"]["version"], "1.3.0");
+        assert_eq!(status["server"]["version"], "1.4.0");
         assert!(!status.to_string().contains("connected"));
     }
 
@@ -3563,7 +4243,8 @@ mod score_tests {
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["parts"][0]["segments"][0]["effective"]["strength"], 2);
         assert_eq!(body["parts"][0]["segments"][0]["clamped"], true);
-        assert_eq!(TOOL_NAMES.len(), 12);
+        // 1.4.0: the four ache_program_* tools append after the twelve.
+        assert_eq!(TOOL_NAMES.len(), 16);
         server.stop().unwrap();
         assert_zeroed(&fixture);
     }
@@ -4060,5 +4741,561 @@ mod rumble_tests {
         for entry in server.rumble_tick(100).unwrap() {
             assert_eq!(entry["error"]["code"], "not_armed");
         }
+    }
+}
+// origin_lane: ntranch; content_label: nsfw
+// The program engine at the tool surface (1.4.0, KoiSync + XToys
+// landings): mock transport, fixture Buttplug, recording TCode link.
+// Validation half: load, run, live stream == pure replay. Adversarial
+// half: stop supremacy mid-pattern / mid-job / mid-queue, watchdog trip,
+// mid-command dropout, gate-bypass attempts.
+#[cfg(test)]
+mod program_tests {
+    use super::*;
+    use crate::decide::AxisLimit;
+    use crate::provider::FakeButtplug;
+    use crate::provider_tcode::{DeviceKind, RecordingLink};
+    use crate::transport::from_config;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const OPEN: [AxisLimit; 6] = [AxisLimit {
+        min: 0,
+        max: 100,
+        max_step: 100,
+    }; 6];
+
+    struct Rig {
+        server: Server,
+        executed: Arc<Mutex<Vec<AllowedOutput>>>,
+        fail: Arc<AtomicBool>,
+        link: RecordingLink,
+    }
+
+    fn rig_with(config: Config) -> Rig {
+        let fixture = FakeButtplug::new();
+        let executed = fixture.executed_log();
+        let fail = fixture.fail_flag();
+        let link = RecordingLink::new();
+        let tcode = TcodeProvider::new("mock", DeviceKind::Sr6, OPEN, Box::new(link.clone()));
+        let transport = from_config(&config);
+        let server = Server::new(config, transport)
+            .with_buttplug(Box::new(fixture))
+            .with_tcode(tcode);
+        Rig {
+            server,
+            executed,
+            fail,
+            link,
+        }
+    }
+
+    fn rig() -> Rig {
+        rig_with(Config::default())
+    }
+
+    fn call(server: &Server, name: &str, arguments: Value) -> (Value, bool) {
+        let result = server
+            .dispatch_call(name, Some(arguments))
+            .expect("no protocol error");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        (
+            serde_json::from_str(text).unwrap(),
+            result["isError"].as_bool().unwrap(),
+        )
+    }
+
+    fn ok(server: &Server, name: &str, arguments: Value) -> Value {
+        let (value, is_error) = call(server, name, arguments);
+        assert!(!is_error, "{name} failed: {value}");
+        value
+    }
+
+    fn wait_for(what: &str, limit_ms: u64, mut done: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(
+                start.elapsed() < Duration::from_millis(limit_ms),
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn program(server: &Server) -> Value {
+        ok(server, "lovense_status", json!({}))["program"].clone()
+    }
+
+    fn pattern(id: &str, function: &str, ms: u64) -> Value {
+        json!({"format": "ache.pattern/v1", "id": id, "function": function,
+            "sections": [{"blocks": [
+                {"kind": "linear", "bottom": 0, "top": 100, "duration_ms": ms / 2},
+                {"kind": "sine", "bottom": 20, "top": 80, "duration_ms": ms / 2, "speed": 2.0}
+            ]}], "loop": "once"})
+    }
+
+    fn frames(rig: &Rig) -> usize {
+        rig.link.frames().len()
+    }
+
+    // --- validation ---------------------------------------------------
+
+    #[test]
+    fn tcode_is_a_fourth_provider_in_status_and_discovery() {
+        let rig = rig();
+        let status = ok(&rig.server, "lovense_status", json!({}));
+        assert_eq!(status["providers"]["tcode"]["available"], true);
+        let devices = ok(&rig.server, "ache_devices", json!({}));
+        let ids: Vec<&str> = devices["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"tcode:0"), "{ids:?}");
+        let device = ok(&rig.server, "ache_device", json!({"device": "tcode:0"}));
+        assert_eq!(device["capabilities"].as_array().unwrap().len(), 6);
+        // Disabled by default in a bare server.
+        let bare = Server::new(Config::default(), from_config(&Config::default()));
+        let status = ok(&bare, "lovense_status", json!({}));
+        assert_eq!(status["providers"]["tcode"]["state"], "disabled");
+    }
+
+    #[test]
+    fn every_spec_kind_loads_hashes_and_sends_nothing() {
+        let rig = rig();
+        let p = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pattern", "spec": pattern("p1", "Generic", 1000)}),
+        );
+        assert_eq!(p["hash"].as_str().unwrap().len(), 64);
+        let f = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "funscript", "id": "fs", "function": "StrokePosition",
+            "spec": {"actions": [{"at": 0, "pos": 0}, {"at": 500, "pos": 100}]}}),
+        );
+        assert_eq!(f["total_ms"], 500);
+        let pk = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pack", "spec": {"format": "ache.pack/v1", "id": "pk",
+            "channels": {"stroke": {"actions": [{"at": 0, "pos": 0}, {"at": 400, "pos": 90}]},
+                         "pitch": {"actions": [{"at": 0, "pos": 50}, {"at": 400, "pos": 60}]}}}}),
+        );
+        assert_eq!(pk["channels"], json!(["StrokePosition", "Pitch"]));
+        let d = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "depth", "spec": {"format": "ache.depth/v1", "id": "dp",
+            "calibration": {"model_m": 0.14, "player_m": 0.14, "body_height_m": 1.6, "stroke_m": 0.12, "mode": "soft"},
+            "samples": [[0.0, 1.0], [0.05, 1.0], [0.1, 1.0]]}}),
+        );
+        assert_eq!(d["function"], "StrokePosition");
+        let a = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "automation", "spec": {"format": "ache.automation/v1", "id": "a1",
+            "controls": [{"id": "stop", "kind": "stop_button"}]}}),
+        );
+        assert_eq!(a["controls"], json!(["stop"]));
+        let s = ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "session", "spec": {"format": "ache.session/v1", "id": "s1",
+            "duration_ms": 1000, "bindings": [{"id": "m", "device": "buttplug:0", "function": "Vibrate", "source": {"pattern": "p1"}}]}}),
+        );
+        assert_eq!(s["lanes"], json!(["m"]));
+        assert!(rig.executed.lock().unwrap().is_empty());
+        assert_eq!(frames(&rig), 0);
+        assert_eq!(ok(&rig.server, "lovense_status", json!({}))["armed"], false);
+    }
+
+    #[test]
+    fn live_run_streams_exactly_the_pure_replay_and_ends_disarmed() {
+        let rig = rig();
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pattern", "spec": pattern("wave", "Generic", 600)}),
+        );
+        let session = json!({"format": "ache.session/v1", "id": "live", "duration_ms": 600, "bindings": [
+            {"id": "v", "device": "buttplug:1", "function": "Vibrate", "source": {"pattern": "wave"}},
+            {"id": "t", "device": "tcode:0", "function": "Surge", "source": {"pattern": "wave"}}]});
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "session", "spec": session.clone()}),
+        );
+        ok(&rig.server, "lovense_arm", json!({}));
+        let started = ok(&rig.server, "ache_program_run", json!({"session": "live"}));
+        assert_eq!(started["started"], true);
+        wait_for("program end", 3_000, || {
+            program(&rig.server)["running"] == false
+        });
+        let report = program(&rig.server);
+        // The bound equals the pattern length, so the bound ends it.
+        assert_eq!(report["stop_reason"], "session_duration", "{report}");
+        // The pure replay of the same compiled session, same gate inputs.
+        let compiled = {
+            let library = rig.server.library.lock().unwrap();
+            CompiledSession::compile(&session, &library, &rig.server.all_devices()).unwrap()
+        };
+        let replay = crate::session::tests::replay(&compiled, 20, &[], OPEN);
+        assert_eq!(report["stream_hash"], json!(replay.hash), "live == replay");
+        assert_eq!(report["commands"], json!(replay.lines.len()));
+        println!(
+            "PROGRAM live==replay hash={} commands={}",
+            replay.hash,
+            replay.lines.len()
+        );
+        let status = ok(&rig.server, "lovense_status", json!({}));
+        assert_eq!(status["armed"], false, "completion latches the master off");
+        assert_eq!(status["output_active"], false);
+        assert_eq!(rig.link.frames().last().unwrap(), b"DSTOP\n");
+    }
+
+    #[test]
+    fn a_pattern_or_pack_runs_on_one_device_without_a_session() {
+        let rig = rig();
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pack", "spec": {"format": "ache.pack/v1", "id": "pk",
+            "channels": {"stroke": {"actions": [{"at": 0, "pos": 0}, {"at": 200, "pos": 90}]}}}}),
+        );
+        ok(&rig.server, "lovense_arm", json!({}));
+        ok(
+            &rig.server,
+            "ache_program_run",
+            json!({"pack": "pk", "device": "tcode:0"}),
+        );
+        wait_for("pack end", 3_000, || {
+            program(&rig.server)["running"] == false
+        });
+        assert_eq!(frames(&rig), 11, "10 frames at 20 ms + DSTOP");
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pattern", "spec": pattern("g", "Generic", 500)}),
+        );
+        ok(&rig.server, "lovense_arm", json!({}));
+        let (error, is_error) = call(
+            &rig.server,
+            "ache_program_run",
+            json!({"pattern": "g", "device": "buttplug:0"}),
+        );
+        assert!(
+            is_error
+                && error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Generic")
+        );
+        ok(
+            &rig.server,
+            "ache_program_run",
+            json!({"pattern": "g", "device": "buttplug:0", "function": "Vibrate"}),
+        );
+        wait_for("pattern end", 3_000, || {
+            program(&rig.server)["running"] == false
+        });
+        assert!(!rig.executed.lock().unwrap().is_empty());
+    }
+
+    // --- adversarial --------------------------------------------------
+
+    #[test]
+    fn a6_stop_mid_pattern_is_synchronous_and_final() {
+        for stop_tool in ["ache_program_stop", "lovense_stop"] {
+            let rig = rig();
+            ok(
+                &rig.server,
+                "ache_program_load",
+                json!({"kind": "pattern", "spec": pattern("long", "StrokePosition", 20_000)}),
+            );
+            ok(&rig.server, "lovense_arm", json!({}));
+            ok(
+                &rig.server,
+                "ache_program_run",
+                json!({"pattern": "long", "device": "tcode:0"}),
+            );
+            wait_for("frames flowing", 2_000, || frames(&rig) > 5);
+            let t0 = Instant::now();
+            let stopped = ok(&rig.server, stop_tool, json!({}));
+            let latency = t0.elapsed();
+            assert_eq!(stopped["armed"], false);
+            let after = frames(&rig);
+            assert_eq!(
+                rig.link.frames().last().unwrap(),
+                b"DSTOP\n",
+                "{stop_tool}: the stop is the last frame"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(
+                frames(&rig),
+                after,
+                "{stop_tool}: no emission after the stop returned"
+            );
+            assert_eq!(program(&rig.server)["running"], false);
+            println!(
+                "PROGRAM a6 stop={stop_tool} latency_us={} frames={after}",
+                latency.as_micros()
+            );
+        }
+    }
+
+    fn automation_session(rig: &Rig) {
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "automation", "spec": {"format": "ache.automation/v1", "id": "jq",
+            "controls": [{"id": "halt", "kind": "stop_button"}, {"id": "go", "kind": "button"}],
+            "triggers": [{"id": "s", "on": "session_start"}, {"id": "g", "on": {"control_pressed": "go"}}],
+            "jobs": [{"id": "tick", "trigger": "s", "repeat": {"every": {"ms": 250}}, "max_runs": 1000, "max_span_ms": 60000,
+                      "actions": [{"set_function": {"target": "m", "value": "20 + (time * 40) % 60"}}]},
+                     {"id": "start_q", "trigger": "g", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+                      "actions": [{"start_queue": "q"}]}],
+            "queues": [{"id": "q", "loop": {"repeat": 50}, "actions": [
+                {"set_function": {"target": "ax", "value": "30"}}, {"delay": {"ms": 250}},
+                {"set_function": {"target": "ax", "value": "60"}}, {"delay": {"ms": 250}}]}]}}),
+        );
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "session", "spec": {"format": "ache.session/v1", "id": "jq",
+            "duration_ms": 60000, "automation": "jq", "inputs": [{"id": "voice"}, {"id": "safeword", "stop": true}],
+            "bindings": [{"id": "m", "device": "buttplug:0", "function": "Vibrate", "source": "automation"},
+                         {"id": "ax", "device": "tcode:0", "function": "Surge", "source": "automation"}]}}),
+        );
+        ok(&rig.server, "lovense_arm", json!({}));
+        ok(&rig.server, "ache_program_run", json!({"session": "jq"}));
+        ok(
+            &rig.server,
+            "ache_program_event",
+            json!({"kind": "press", "name": "go"}),
+        );
+        wait_for("job and queue both emitting", 3_000, || {
+            !rig.executed.lock().unwrap().is_empty() && frames(rig) > 3
+        });
+    }
+
+    #[test]
+    fn a6_stop_button_and_stop_input_outrank_a_running_job_and_queue() {
+        for (kind, name) in [("press", "halt"), ("external", "safeword")] {
+            let rig = rig();
+            automation_session(&rig);
+            let stopped = ok(
+                &rig.server,
+                "ache_program_event",
+                json!({"kind": kind, "name": name}),
+            );
+            assert_eq!(stopped["stopped"], true, "{name}");
+            let (executed, sent) = (rig.executed.lock().unwrap().len(), frames(&rig));
+            assert_eq!(rig.link.frames().last().unwrap(), b"DSTOP\n");
+            std::thread::sleep(Duration::from_millis(400));
+            assert_eq!(
+                rig.executed.lock().unwrap().len(),
+                executed,
+                "{name}: job emitted after stop"
+            );
+            assert_eq!(frames(&rig), sent, "{name}: queue emitted after stop");
+            assert_eq!(ok(&rig.server, "lovense_status", json!({}))["armed"], false);
+        }
+    }
+
+    #[test]
+    fn a6_watchdog_trip_during_an_automation_run_zeroes_everything() {
+        let rig = rig_with(Config {
+            watchdog_secs: 1,
+            ..Config::default()
+        });
+        automation_session(&rig);
+        // Silence: no tool calls. Drive the production watchdog poll.
+        let start = Instant::now();
+        while !rig.server.trip_watchdog() {
+            assert!(
+                start.elapsed() < Duration::from_secs(4),
+                "the watchdog must trip"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (executed, sent) = (rig.executed.lock().unwrap().len(), frames(&rig));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(rig.executed.lock().unwrap().len(), executed);
+        assert_eq!(frames(&rig), sent);
+        let status = ok(&rig.server, "lovense_status", json!({}));
+        assert_eq!(status["watchdog_trips"], 1);
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["program"]["running"], false);
+    }
+
+    #[test]
+    fn mid_command_dropout_drops_the_session_and_never_resumes() {
+        // TCode link dropout.
+        let rig = rig();
+        automation_session(&rig);
+        rig.link.set_fail(true);
+        wait_for("program halt", 2_000, || {
+            program(&rig.server)["running"] == false
+        });
+        let report = program(&rig.server);
+        assert!(
+            report["stop_reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("session_drop"),
+            "{report}"
+        );
+        let status = ok(&rig.server, "lovense_status", json!({}));
+        assert_eq!(status["session_health"], "degraded");
+        assert_eq!(status["armed"], false);
+        rig.link.set_fail(false);
+        let executed = rig.executed.lock().unwrap().len();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            rig.executed.lock().unwrap().len(),
+            executed,
+            "a reconnect resumes nothing"
+        );
+        // Buttplug dropout, same law.
+        let rig = rig_with(Config::default());
+        automation_session(&rig);
+        rig.fail.store(true, Ordering::SeqCst);
+        wait_for("program halt", 2_000, || {
+            program(&rig.server)["running"] == false
+        });
+        assert!(
+            program(&rig.server)["stop_reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("session_drop")
+        );
+        assert_eq!(
+            rig.link.frames().last().unwrap(),
+            b"DSTOP\n",
+            "every provider is zeroed"
+        );
+    }
+
+    #[test]
+    fn a4_gate_bypass_attempts_are_refused_and_send_nothing() {
+        let rig = rig();
+        ok(
+            &rig.server,
+            "ache_program_load",
+            json!({"kind": "pattern", "spec": pattern("p", "Vibrate", 1000)}),
+        );
+        // Disarmed: a run is refused before any thread exists.
+        let (error, is_error) = call(
+            &rig.server,
+            "ache_program_run",
+            json!({"pattern": "p", "device": "buttplug:0"}),
+        );
+        assert!(is_error);
+        assert_eq!(error["error"]["code"], "not_armed");
+        assert!(rig.executed.lock().unwrap().is_empty());
+        // Events with no program, events carrying values, unregistered
+        // sources and controls: refused.
+        let (_, is_error) = call(
+            &rig.server,
+            "ache_program_event",
+            json!({"kind": "external", "name": "voice"}),
+        );
+        assert!(is_error, "no program is running");
+        automation_session(&rig);
+        for args in [
+            json!({"kind": "external", "name": "voice", "value": 99}),
+            json!({"kind": "external", "name": "webhook"}),
+            json!({"kind": "slider", "name": "ghost", "value": 1}),
+            json!({"kind": "press", "name": "nope"}),
+            json!({"kind": "intensity", "name": "m", "value": 100}),
+        ] {
+            let (_, is_error) = call(&rig.server, "ache_program_event", args.clone());
+            assert!(is_error, "{args}");
+        }
+        // The direct output tools cannot run beside a program.
+        for (tool, args) in [
+            (
+                "lovense_function",
+                json!({"feature": "Vibrate", "strength": 20, "time_sec": 5, "device": "buttplug:0"}),
+            ),
+            (
+                "lovense_pattern",
+                json!({"interval_ms": 200, "strengths": [20], "time_sec": 5, "device": "buttplug:0"}),
+            ),
+        ] {
+            let (error, is_error) = call(&rig.server, tool, args);
+            assert!(
+                is_error
+                    && error["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("program"),
+                "{tool}"
+            );
+        }
+        let (_, is_error) = call(&rig.server, "ache_program_run", json!({"session": "jq"}));
+        assert!(is_error, "one program at a time");
+        // A TCode device refuses the direct tools outright.
+        ok(&rig.server, "ache_program_stop", json!({}));
+        ok(&rig.server, "lovense_arm", json!({}));
+        let (error, is_error) = call(
+            &rig.server,
+            "lovense_function",
+            json!({"feature": "Stroke", "strength": 50, "time_sec": 2, "device": "tcode:0"}),
+        );
+        assert!(is_error, "{error}");
+        assert_eq!(
+            ok(&rig.server, "lovense_status", json!({}))["session_health"],
+            "ok",
+            "a refusal is not a drop"
+        );
+        // Code-shaped and unbounded specs never load.
+        for spec in [
+            json!({"kind": "automation", "spec": {"format": "ache.automation/v1", "id": "js", "script": "xtoys.callAction()", "controls": [{"id": "s", "kind": "stop_button"}]}}),
+            json!({"kind": "automation", "spec": {"format": "ache.automation/v1", "id": "nobound", "controls": [{"id": "s", "kind": "stop_button"}],
+                "jobs": [{"id": "j", "repeat": {"while": "1"}, "actions": ["stop_all"], "max_span_ms": 1000}]}}),
+            json!({"kind": "pattern", "spec": {"format": "ache.pattern/v1", "id": "x", "function": "Vibrate",
+                "scripted": {"base": 0, "expr": "fetch('http://x')", "duration_ms": 1000}, "loop": "once"}}),
+            json!({"kind": "session", "spec": {"format": "ache.session/v1", "id": "toolong", "duration_ms": 3_600_001,
+                "bindings": [{"id": "m", "device": "buttplug:0", "function": "Vibrate", "source": {"pattern": "p"}}]}}),
+            json!({"kind": "webhook", "spec": {}}),
+        ] {
+            let (_, is_error) = call(&rig.server, "ache_program_load", spec.clone());
+            assert!(is_error, "{spec}");
+        }
+    }
+
+    #[test]
+    fn program_tool_arguments_are_shape_checked_before_anything_runs() {
+        let rig = rig();
+        for (tool, args) in [
+            (
+                "ache_program_load",
+                json!({"kind": "pattern", "spec": "not an object"}),
+            ),
+            (
+                "ache_program_load",
+                json!({"kind": "pattern", "spec": {}, "exec": true}),
+            ),
+            ("ache_program_run", json!({"session": 5})),
+            ("ache_program_stop", json!({"now": true})),
+            (
+                "ache_program_event",
+                json!({"kind": "slider", "name": "k", "value": "high"}),
+            ),
+        ] {
+            assert!(
+                rig.server.dispatch_call(tool, Some(args.clone())).is_err(),
+                "{tool} {args}"
+            );
+        }
+        assert!(TOOL_NAMES.ends_with(&[
+            "ache_program_load",
+            "ache_program_run",
+            "ache_program_stop",
+            "ache_program_event"
+        ]));
     }
 }

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "ache"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "buttplug_client",
  "buttplug_client_in_process",
@@ -17,6 +17,8 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "serialport",
+ "sha2",
  "tokio",
  "toml",
  "ureq",

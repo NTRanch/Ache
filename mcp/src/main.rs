@@ -14,16 +14,24 @@
 
 #![forbid(unsafe_code)]
 
+mod automation;
 mod config;
 mod decide;
 mod error;
+mod expr;
+mod funscript;
 mod guard;
+mod pattern;
 mod provider;
 mod provider_buttplug;
 mod provider_server_api;
+mod provider_tcode;
+#[cfg(test)]
+mod replay_tests;
 mod rumble;
 mod server;
 mod service;
+mod session;
 mod state;
 #[cfg(test)]
 mod test_stub;
@@ -75,11 +83,13 @@ fn main() -> ExitCode {
     let buttplug = buttplug_provider(&config);
     let (server_api, pairing) = server_api_provider(&config);
     let rumble = config.rumble.clone();
+    let config_for_tcode = config.clone();
     let server = Arc::new(
         Server::new(config, transport)
             .with_buttplug(buttplug)
             .with_server_api(server_api)
-            .with_pairing(pairing),
+            .with_pairing(pairing)
+            .with_tcode(tcode_provider(&config_for_tcode)),
     );
     // The ache.rumble/v1 live input: only when the operator turned it
     // on AND named a socket. Off is the default; a socket that cannot
@@ -183,6 +193,46 @@ fn buttplug_provider(config: &Config) -> Box<dyn DeviceProvider> {
         TransportKind::Real => Box::new(provider_buttplug::EmbeddedButtplug::start(
             config.buttplug_scan_ms,
         )),
+    }
+}
+
+/// Wire the TCode provider (KoiSync landing), mirroring the others:
+/// disabled by default; mock mode gets the fixture (a recording link,
+/// labelled fixture); real mode opens the configured serial or UDP link.
+/// A link that will not open is an unavailable provider, never a dead
+/// server.
+fn tcode_provider(config: &Config) -> provider_tcode::TcodeProvider {
+    use config::TcodeLinkKind;
+    use provider_tcode::{DeviceKind, RecordingLink, SerialLink, TcodeProvider, UdpLink};
+    let section = &config.tcode;
+    if !section.enabled {
+        return TcodeProvider::disabled();
+    }
+    let kind = DeviceKind::parse(&section.device).expect("config validated the device kind");
+    let mut limits = [decide::AxisLimit {
+        min: 0,
+        max: 0,
+        max_step: 0,
+    }; 6];
+    for (axis, limit) in limits.iter_mut().enumerate() {
+        *limit = decide::AxisLimit {
+            min: section.axis_min[axis],
+            max: section.axis_max[axis],
+            max_step: section.max_step,
+        };
+    }
+    if config.transport == TransportKind::Mock {
+        return TcodeProvider::new("mock", kind, limits, Box::new(RecordingLink::new()));
+    }
+    let link: Result<Box<dyn provider_tcode::TcodeLink>, error::AcheError> = match &section.link {
+        TcodeLinkKind::Udp { host, port } => UdpLink::open(host, *port).map(|l| Box::new(l) as _),
+        TcodeLinkKind::Serial { path, baud } => {
+            SerialLink::open(path, *baud).map(|l| Box::new(l) as _)
+        }
+    };
+    match link {
+        Ok(link) => TcodeProvider::new("ready", kind, limits, link),
+        Err(error) => TcodeProvider::unavailable(format!("tcode link failed to open: {error}")),
     }
 }
 

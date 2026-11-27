@@ -3,6 +3,44 @@
 All notable changes to this repository's MCP server. Versions are the
 crate version in `mcp/Cargo.toml`.
 
+## 1.4.0 — 2026-11-27 — the KoiSync and XToys landings
+
+Built on the 1.2.0 lineage (base c1e5a1f) and landed by merge with
+the 1.3.0 GHR programme lineage: the 1.4.0 on main contains both
+the landings below and everything in the 1.3.0 section that follows.
+
+- KoiSync landing: a TCode multi-axis provider (SR6 / OSR2 / SSR1 over
+  USB serial or UDP; opt-in, `[tcode] enabled = false` by default) with
+  six first-class axes, per-axis travel windows and a per-frame slew
+  bound in the gate (`decide_axes`; defaults [10, 90] and 4 per 20 ms,
+  from KoiSync's global limits), 50 Hz emission, `DSTOP` on every zero
+  path. One funscript adapter for single-axis files and the six-axis
+  pack (`ache.pack/v1`); the depth solver as a pure `ache.depth/v1`
+  transform with per-character calibration. Spec, every claim cited:
+  `docs/SPEC-KOISYNC.md`.
+- XToys landing: `ache.pattern/v1` (Square/Linear/Sine blocks; a
+  bounded, total, seedless expression language for scripted patterns),
+  `ache.automation/v1` (closed trigger/action sets, jobs with required
+  `max_runs` + `max_span_ms`, frozen queues, typed clamped
+  session-scoped variables, a mandatory stop button; seeded `hash01`
+  only), `ache.session/v1` (one source per device function, packs
+  all-or-none, load-time duration bounds). No JavaScript, no webhooks,
+  no runtime-mutable programs.
+- Four new tools (16 total): `ache_program_load`, `ache_program_run`,
+  `ache_program_stop`, `ache_program_event`. The original twelve keep
+  their behaviour. Every program command passes the decide() gate at
+  emission time; stop inputs and the stop button are the synchronous
+  stop; the heartbeat watchdog governs programs as it governs scores.
+- Seed library (`mcp/library/seeds.json`): estate-authored specs for
+  the XToys study's top-10 ADAPT shapes; sensor inputs stand in as
+  pre-registered named events.
+- Spec extensions, recorded: S-1 Linear `falling` (descending ramps);
+  S-2 `set_function` takes a bounded expression, not only a literal.
+- Gates: 272 tests (261 unit + 2 manifest + 9 stdio smoke), fmt and
+  clippy `-D warnings` clean, three consecutive green runs, replay
+  hashes byte-identical across runs for 14 fixtures. Evidence in
+  `evidence/landings-1.4.0/`. No live-device action was performed.
+
 ## 1.3.0 — 2026-11-26 — GHR programme: devices, rumble, Fredorch
 
 - ache.rumble/v1 event-source input: rumble events as a gated input source (GHR Phase 3).

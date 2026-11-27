@@ -82,6 +82,49 @@ pub struct Config {
     pub server_api_uid_pass_entry: String,
     /// The `ache.rumble/v1` event-source input. Default OFF.
     pub rumble: RumbleConfig,
+    /// The TCode multi-axis provider (KoiSync landing). Off by default.
+    pub tcode: TcodeConfig,
+}
+
+/// Which byte link the TCode provider opens in real mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TcodeLinkKind {
+    Udp { host: String, port: u16 },
+    Serial { path: String, baud: u32 },
+}
+
+/// The `[tcode]` section, validated. Windows and the slew bound are on
+/// the 0..=100 position scale. Defaults follow KoiSync's global limits
+/// (`Minimum 0.1, Maximum 0.9, MaxUnitsPerSecond 2`, Motion.cs:104):
+/// a [10, 90] window and 4 units per 20 ms frame (200 %/s).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TcodeConfig {
+    pub enabled: bool,
+    pub device: String,
+    pub link: TcodeLinkKind,
+    pub axis_min: [u8; 6],
+    pub axis_max: [u8; 6],
+    pub max_step: u8,
+}
+
+pub const TCODE_UDP_PORT_DEFAULT: u16 = 8000;
+pub const TCODE_BAUD_DEFAULT: u32 = 115_200;
+pub const TCODE_MAX_STEP_DEFAULT: u8 = 4;
+
+impl Default for TcodeConfig {
+    fn default() -> TcodeConfig {
+        TcodeConfig {
+            enabled: false,
+            device: "SR6".to_string(),
+            link: TcodeLinkKind::Udp {
+                host: "127.0.0.1".to_string(),
+                port: TCODE_UDP_PORT_DEFAULT,
+            },
+            axis_min: [10; 6],
+            axis_max: [90; 6],
+            max_step: TCODE_MAX_STEP_DEFAULT,
+        }
+    }
 }
 
 impl Default for Config {
@@ -99,6 +142,7 @@ impl Default for Config {
             server_api_token_pass_entry: SERVER_API_TOKEN_PASS_ENTRY_DEFAULT.to_string(),
             server_api_uid_pass_entry: SERVER_API_UID_PASS_ENTRY_DEFAULT.to_string(),
             rumble: RumbleConfig::default(),
+            tcode: TcodeConfig::default(),
         }
     }
 }
@@ -117,6 +161,7 @@ struct RawConfig {
     buttplug: Option<RawButtplug>,
     server_api: Option<RawServerApi>,
     rumble: Option<RawRumble>,
+    tcode: Option<RawTcode>,
 }
 
 /// The `[rumble]` section: the `ache.rumble/v1` input. Sources and
@@ -149,6 +194,116 @@ struct RawRumbleMap {
     device: String,
     function: String,
     max_strength: Option<i64>,
+}
+
+/// The `[tcode]` section. Same fail-closed discipline.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTcode {
+    enabled: Option<bool>,
+    device: Option<String>,
+    link: Option<String>,
+    host: Option<String>,
+    port: Option<i64>,
+    serial: Option<String>,
+    baud: Option<i64>,
+    axis_min: Option<Vec<i64>>,
+    axis_max: Option<Vec<i64>>,
+    max_step: Option<i64>,
+}
+
+fn axis_array(field: &str, values: Option<Vec<i64>>, default: [u8; 6]) -> Result<[u8; 6]> {
+    let Some(values) = values else {
+        return Ok(default);
+    };
+    if values.len() != 6 {
+        return invalid(field, "must list exactly six axes (L0 L1 L2 R0 R1 R2)");
+    }
+    let mut out = [0u8; 6];
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = match u8::try_from(value) {
+            Ok(v) if v <= 100 => v,
+            _ => return invalid(field, format!("{value} is outside 0..=100")),
+        };
+    }
+    Ok(out)
+}
+
+fn validate_tcode(raw: RawTcode) -> Result<TcodeConfig> {
+    let defaults = TcodeConfig::default();
+    let device = raw.device.unwrap_or(defaults.device);
+    if !matches!(device.as_str(), "SR6" | "OSR2" | "SSR1") {
+        return invalid(
+            "tcode.device",
+            format!("`{device}` is not SR6, OSR2, or SSR1"),
+        );
+    }
+    let link = match raw.link.as_deref() {
+        None | Some("udp") => {
+            if raw.serial.is_some() || raw.baud.is_some() {
+                return invalid("tcode", "serial/baud apply to link = \"serial\" only");
+            }
+            let host = match raw.host {
+                None => "127.0.0.1".to_string(),
+                Some(host) if !host.is_empty() => validate_host(host)?,
+                Some(_) => return invalid("tcode.host", "must not be empty"),
+            };
+            let port = match raw.port {
+                None => TCODE_UDP_PORT_DEFAULT,
+                Some(port) => match u16::try_from(port) {
+                    Ok(port) if port >= 1 => port,
+                    _ => return invalid("tcode.port", format!("{port} is outside 1..=65535")),
+                },
+            };
+            TcodeLinkKind::Udp { host, port }
+        }
+        Some("serial") => {
+            if raw.host.is_some() || raw.port.is_some() {
+                return invalid("tcode", "host/port apply to link = \"udp\" only");
+            }
+            let Some(path) = raw.serial else {
+                return invalid("tcode.serial", "link = \"serial\" needs a device path");
+            };
+            let ok = path.starts_with("/dev/")
+                && path.len() <= PASS_ENTRY_BYTES_MAX
+                && path
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.'))
+                && !path.split('/').any(|part| part == "..");
+            if !ok {
+                return invalid("tcode.serial", format!("`{path}` must be a /dev/ path"));
+            }
+            let baud = match raw.baud {
+                None => TCODE_BAUD_DEFAULT,
+                Some(baud) => match u32::try_from(baud) {
+                    Ok(baud) if (1200..=2_000_000).contains(&baud) => baud,
+                    _ => return invalid("tcode.baud", format!("{baud} is outside 1200..=2000000")),
+                },
+            };
+            TcodeLinkKind::Serial { path, baud }
+        }
+        Some(other) => return invalid("tcode.link", format!("`{other}` is not udp or serial")),
+    };
+    let axis_min = axis_array("tcode.axis_min", raw.axis_min, defaults.axis_min)?;
+    let axis_max = axis_array("tcode.axis_max", raw.axis_max, defaults.axis_max)?;
+    if axis_min.iter().zip(axis_max.iter()).any(|(lo, hi)| lo > hi) {
+        return invalid("tcode.axis_min", "every axis_min must be <= its axis_max");
+    }
+    let max_step = match raw.max_step {
+        None => defaults.max_step,
+        Some(step) => match u8::try_from(step) {
+            Ok(step) if (1..=100).contains(&step) => step,
+            _ => return invalid("tcode.max_step", format!("{step} is outside 1..=100")),
+        },
+    };
+    Ok(TcodeConfig {
+        enabled: raw.enabled.unwrap_or(defaults.enabled),
+        device,
+        link,
+        axis_min,
+        axis_max,
+        max_step,
+    })
 }
 
 /// The `[buttplug]` section: the embedded Buttplug provider's knobs.
@@ -271,6 +426,10 @@ impl Config {
             server_api_token_pass_entry,
             server_api_uid_pass_entry,
             rumble,
+            tcode: match raw.tcode {
+                None => TcodeConfig::default(),
+                Some(section) => validate_tcode(section)?,
+            },
         })
     }
 
@@ -785,6 +944,54 @@ mod tests {
         refused("port = \"20010\"");
         refused("transport = ");
         refused("[section]\nhost = \"x\"");
+    }
+
+    // --- [tcode] (KoiSync landing) ------------------------------------
+
+    #[test]
+    fn tcode_is_off_by_default_with_koisync_limits() {
+        let config = Config::from_toml_str("").unwrap();
+        assert!(!config.tcode.enabled);
+        assert_eq!(config.tcode.axis_min, [10; 6]);
+        assert_eq!(config.tcode.axis_max, [90; 6]);
+        assert_eq!(config.tcode.max_step, 4);
+        let config = Config::from_toml_str(
+            "[tcode]\nenabled = true\ndevice = \"OSR2\"\nlink = \"serial\"\n\
+             serial = \"/dev/ttyUSB0\"\nbaud = 230400\naxis_min = [0,0,0,0,0,0]\n\
+             axis_max = [100,100,100,100,100,100]\nmax_step = 100\n",
+        )
+        .unwrap();
+        assert!(config.tcode.enabled);
+        assert_eq!(
+            config.tcode.link,
+            TcodeLinkKind::Serial {
+                path: "/dev/ttyUSB0".into(),
+                baud: 230_400
+            }
+        );
+    }
+
+    #[test]
+    fn tcode_section_fails_closed() {
+        for text in [
+            "[tcode]\ndevice = \"Handy\"",
+            "[tcode]\nlink = \"bluetooth\"",
+            "[tcode]\nlink = \"serial\"",
+            "[tcode]\nlink = \"serial\"\nserial = \"COM3\"",
+            "[tcode]\nlink = \"serial\"\nserial = \"/dev/../etc/passwd\"",
+            "[tcode]\nlink = \"serial\"\nserial = \"/dev/ttyUSB0\"\nbaud = 9",
+            "[tcode]\nlink = \"serial\"\nserial = \"/dev/ttyUSB0\"\nhost = \"x\"",
+            "[tcode]\nport = 0",
+            "[tcode]\nhost = \"http://x\"",
+            "[tcode]\nbaud = 115200",
+            "[tcode]\naxis_min = [0,0,0]",
+            "[tcode]\naxis_max = [101,0,0,0,0,0]",
+            "[tcode]\naxis_min = [50,0,0,0,0,0]\naxis_max = [40,90,90,90,90,90]",
+            "[tcode]\nmax_step = 0",
+            "[tcode]\nwebhook = \"x\"",
+        ] {
+            assert_eq!(refused(text).code, ErrorCode::ConfigInvalid, "{text}");
+        }
     }
 
     fn toml_string(value: &str) -> String {

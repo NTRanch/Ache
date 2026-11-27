@@ -1223,6 +1223,292 @@ mod step2_tests {
     }
 }
 
+// ------------------------------------------------------------ axes
+//
+// The TCode multi-axis half of the gate (KoiSync landing; spec in
+// docs/SPEC-KOISYNC.md). Same shape as the planner above: the state
+// half (a target exists, the master is armed) is the shared
+// `gate_output`, then per-axis validation and clamping, and the wire
+// frame is rendered here and nowhere else. Axis values are positions
+// on a 0..=100 scale, so the per-axis "ceiling" is a travel window
+// `[min, max]` plus a per-frame slew bound — not the 0..=20 intensity
+// ceiling, which does not apply to positions.
+
+/// The six TCode axes in KoiSync's order (`src/Shared/Motion.cs:66`).
+pub const TCODE_AXES: [&str; 6] = ["L0", "L1", "L2", "R0", "R1", "R2"];
+/// The TCode stop frame (`src/KoiSync.Plugin/Devices.cs:50`).
+pub const TCODE_STOP: &[u8] = b"DSTOP\n";
+/// TCode interval bounds, ms (`src/Shared/Motion.cs:334`).
+pub const TCODE_INTERVAL_MS_MIN: i64 = 5;
+pub const TCODE_INTERVAL_MS_MAX: i64 = 250;
+
+/// One axis's limits: the travel window and the largest change one
+/// frame may make, all on the 0..=100 position scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AxisLimit {
+    pub min: u8,
+    pub max: u8,
+    pub max_step: u8,
+}
+
+/// A requested axis frame: `(axis index, position)` pairs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxesIntent {
+    pub values: Vec<(usize, i64)>,
+    pub interval_ms: i64,
+}
+
+/// A gate-approved axis frame. Only `decide_axes` constructs one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowedAxes {
+    /// `(axis index, effective position)`, in axis order.
+    pub values: Vec<(usize, u8)>,
+    pub interval_ms: u16,
+    /// How many values were clamped (window or slew) to fit.
+    pub clamps: u32,
+}
+
+/// Plan one axis frame. `supported` lists the axes the device has;
+/// `last` holds the previous effective frame (the slew reference;
+/// `None` after a stop, when the window midpoint is the reference).
+pub fn decide_axes(
+    snapshot: &GateSnapshot,
+    intent: &AxesIntent,
+    supported: &[usize],
+    limits: &[AxisLimit; 6],
+    last: &[Option<u8>; 6],
+) -> Result<AllowedAxes> {
+    gate_output(snapshot)?;
+    if intent.values.is_empty() {
+        return request_invalid("an axis frame needs at least one axis");
+    }
+    if !(TCODE_INTERVAL_MS_MIN..=TCODE_INTERVAL_MS_MAX).contains(&intent.interval_ms) {
+        return request_invalid(format!(
+            "axis interval {} ms is outside {TCODE_INTERVAL_MS_MIN}..={TCODE_INTERVAL_MS_MAX}",
+            intent.interval_ms
+        ));
+    }
+    let mut seen = [false; 6];
+    let mut values = Vec::with_capacity(intent.values.len());
+    let mut clamps = 0u32;
+    for &(axis, requested) in &intent.values {
+        if axis >= TCODE_AXES.len() {
+            return request_invalid(format!("axis index {axis} does not exist"));
+        }
+        if seen[axis] {
+            return request_invalid(format!(
+                "axis {} appears twice in one frame",
+                TCODE_AXES[axis]
+            ));
+        }
+        seen[axis] = true;
+        if !supported.contains(&axis) {
+            return capability_unsupported(format!(
+                "the target device does not offer axis {}",
+                TCODE_AXES[axis]
+            ));
+        }
+        if requested < 0 {
+            return request_invalid("axis positions must not be negative");
+        }
+        let limit = limits[axis];
+        debug_assert!(limit.min <= limit.max && limit.max <= 100);
+        let windowed = requested.clamp(i64::from(limit.min), i64::from(limit.max));
+        let reference = i64::from(last[axis].unwrap_or((limit.min + limit.max) / 2));
+        let step = i64::from(limit.max_step);
+        let effective = windowed.clamp(reference - step, reference + step);
+        let effective = effective.clamp(i64::from(limit.min), i64::from(limit.max));
+        if effective != requested {
+            clamps += 1;
+        }
+        values.push((axis, u8::try_from(effective).expect("clamped into 0..=100")));
+    }
+    values.sort_by_key(|(axis, _)| *axis);
+    Ok(AllowedAxes {
+        values,
+        interval_ms: u16::try_from(intent.interval_ms).expect("bounded above"),
+        clamps,
+    })
+}
+
+/// Render an approved frame as TCode: `AXIS + DDDD + I + interval`,
+/// space-joined, newline-terminated — KoiSync's encoder law
+/// (`src/Shared/Motion.cs:325-337`), with `DDDD = min(pos × 100, 9999)`
+/// (the integer form of `round(clamp(v, 0, 0.9999) × 10000)`).
+#[must_use]
+pub fn tcode_wire(frame: &AllowedAxes) -> String {
+    let mut parts = Vec::with_capacity(frame.values.len());
+    for &(axis, position) in &frame.values {
+        let digits = (u32::from(position) * 100).min(9_999);
+        parts.push(format!(
+            "{}{digits:04}I{}",
+            TCODE_AXES[axis], frame.interval_ms
+        ));
+    }
+    let mut text = parts.join(" ");
+    text.push('\n');
+    text
+}
+
+#[cfg(test)]
+mod axes_tests {
+    use super::*;
+
+    const OPEN: AxisLimit = AxisLimit {
+        min: 0,
+        max: 100,
+        max_step: 100,
+    };
+
+    fn armed() -> GateSnapshot {
+        GateSnapshot {
+            armed: true,
+            target_configured: true,
+            ceiling: 20,
+        }
+    }
+
+    fn frame(values: &[(usize, i64)]) -> AxesIntent {
+        AxesIntent {
+            values: values.to_vec(),
+            interval_ms: 20,
+        }
+    }
+
+    const ALL: [usize; 6] = [0, 1, 2, 3, 4, 5];
+
+    // --- validation ---------------------------------------------------
+
+    #[test]
+    fn frames_render_koisync_tcode() {
+        let plan = decide_axes(
+            &armed(),
+            &frame(&[(3, 50), (0, 0), (1, 100)]),
+            &ALL,
+            &[OPEN; 6],
+            &[None; 6],
+        )
+        .unwrap();
+        assert_eq!(tcode_wire(&plan), "L00000I20 L19999I20 R05000I20\n");
+        assert_eq!(plan.clamps, 0);
+    }
+
+    #[test]
+    fn window_and_slew_clamp_and_count() {
+        let mut limits = [OPEN; 6];
+        limits[0] = AxisLimit {
+            min: 10,
+            max: 90,
+            max_step: 4,
+        };
+        // From a last value of 50, a request for 99 moves at most 4.
+        let plan = decide_axes(
+            &armed(),
+            &frame(&[(0, 99)]),
+            &ALL,
+            &limits,
+            &[Some(50), None, None, None, None, None],
+        )
+        .unwrap();
+        assert_eq!(plan.values, vec![(0, 54)]);
+        assert_eq!(plan.clamps, 1);
+        // With no reference, the window midpoint is the reference.
+        let plan = decide_axes(&armed(), &frame(&[(0, 0)]), &ALL, &limits, &[None; 6]).unwrap();
+        assert_eq!(plan.values, vec![(0, 46)]);
+        // Inside the window and the step: untouched.
+        let plan = decide_axes(
+            &armed(),
+            &frame(&[(0, 52)]),
+            &ALL,
+            &limits,
+            &[Some(50), None, None, None, None, None],
+        )
+        .unwrap();
+        assert_eq!((plan.values[0].1, plan.clamps), (52, 0));
+    }
+
+    // --- adversarial --------------------------------------------------
+
+    #[test]
+    fn axis_frames_pass_the_same_state_gate() {
+        let disarmed = GateSnapshot {
+            armed: false,
+            ..armed()
+        };
+        let error =
+            decide_axes(&disarmed, &frame(&[(0, 50)]), &ALL, &[OPEN; 6], &[None; 6]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotArmed);
+        let untargeted = GateSnapshot {
+            target_configured: false,
+            ..armed()
+        };
+        let error = decide_axes(
+            &untargeted,
+            &frame(&[(0, 50)]),
+            &ALL,
+            &[OPEN; 6],
+            &[None; 6],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::TargetUnconfigured);
+    }
+
+    #[test]
+    fn malformed_frames_are_refused() {
+        let osr2 = [0, 4, 5];
+        for (intent, supported, code) in [
+            (frame(&[]), &ALL[..], ErrorCode::RequestInvalid),
+            (frame(&[(6, 1)]), &ALL[..], ErrorCode::RequestInvalid),
+            (
+                frame(&[(0, 1), (0, 2)]),
+                &ALL[..],
+                ErrorCode::RequestInvalid,
+            ),
+            (frame(&[(0, -1)]), &ALL[..], ErrorCode::RequestInvalid),
+            (
+                frame(&[(1, 50)]),
+                &osr2[..],
+                ErrorCode::CapabilityUnsupported,
+            ),
+            (
+                AxesIntent {
+                    values: vec![(0, 1)],
+                    interval_ms: 4,
+                },
+                &ALL[..],
+                ErrorCode::RequestInvalid,
+            ),
+            (
+                AxesIntent {
+                    values: vec![(0, 1)],
+                    interval_ms: 251,
+                },
+                &ALL[..],
+                ErrorCode::RequestInvalid,
+            ),
+        ] {
+            let error =
+                decide_axes(&armed(), &intent, supported, &[OPEN; 6], &[None; 6]).unwrap_err();
+            assert_eq!(error.code, code, "{intent:?}");
+        }
+    }
+
+    #[test]
+    fn over_range_positions_clamp_silently_never_reach_the_wire_raw() {
+        let plan = decide_axes(
+            &armed(),
+            &frame(&[(0, 1_000_000)]),
+            &ALL,
+            &[OPEN; 6],
+            &[Some(100), None, None, None, None, None],
+        )
+        .unwrap();
+        assert_eq!(plan.values, vec![(0, 100)]);
+        assert_eq!(tcode_wire(&plan), "L09999I20\n");
+        assert_eq!(plan.clamps, 1);
+    }
+}
+
 /// A score is bounded to one hour per part, with no duplicate device streams.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

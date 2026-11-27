@@ -1,0 +1,187 @@
+{
+  "_note": "ache seed library (1.4.0). Estate-authored specs for the XToys study's top-10 ADAPT verdicts (ALIGNMENT.md), written from the studied program SHAPES only; no gallery item is copied. Sensor-driven XToys inputs are rejected for v1 (SPEC-XTOYS-ACHE 2.1), so every closed-loop seed takes its boundary signal as a pre-registered external_event (a name, no value) that the session must register in `inputs`. Automation targets are binding ids: `main` (and `aux` where noted). origin_lane: ntranch; content_label: nsfw.",
+  "patterns": [
+    {
+      "format": "ache.pattern/v1", "id": "alma-draining-loop", "function": "Generic",
+      "provenance": {"source": "estate", "title": "Draining loop (ALIGNMENT #2 shape: Alma line via HYP pairing)"},
+      "sections": [
+        {"blocks": [
+          {"kind": "sine", "bottom": 10, "top": 45, "duration_ms": 6000, "loops": 4},
+          {"kind": "sine", "bottom": 20, "top": 60, "duration_ms": 6000, "loops": 4},
+          {"kind": "sine", "bottom": 30, "top": 75, "duration_ms": 6000, "loops": 4}
+        ]},
+        {"blocks": [{"kind": "linear", "bottom": 0, "top": 75, "duration_ms": 8000, "falling": true}]}
+      ],
+      "loop": "once"
+    },
+    {
+      "format": "ache.pattern/v1", "id": "alma-nipple-cycle", "function": "Generic",
+      "provenance": {"source": "estate", "title": "Sustained cycling (ALIGNMENT #3 shape: nipple training)"},
+      "sections": [
+        {"blocks": [
+          {"kind": "sine", "bottom": 20, "top": 55, "duration_ms": 2000, "speed": 2.0, "loops": 10},
+          {"kind": "square", "top": 40, "duration_ms": 3000},
+          {"kind": "sine", "bottom": 25, "top": 65, "duration_ms": 2000, "speed": 2.0, "loops": 10},
+          {"kind": "linear", "bottom": 0, "top": 65, "duration_ms": 4000, "falling": true}
+        ]}
+      ],
+      "loop": {"repeat": 2}
+    },
+    {
+      "format": "ache.pattern/v1", "id": "hyp-click-reward", "function": "Generic",
+      "provenance": {"source": "estate", "title": "Clicker reward (ALIGNMENT #4 shape)"},
+      "sections": [
+        {"blocks": [
+          {"kind": "square", "top": 70, "duration_ms": 300},
+          {"kind": "square", "top": 0, "duration_ms": 200},
+          {"kind": "square", "top": 70, "duration_ms": 300},
+          {"kind": "linear", "bottom": 0, "top": 70, "duration_ms": 1200, "falling": true}
+        ]}
+      ],
+      "loop": "once"
+    },
+    {
+      "format": "ache.pattern/v1", "id": "ladder-treat", "function": "Generic",
+      "provenance": {"source": "estate", "title": "Keyword ladder rung: treat (ALIGNMENT #5 shape)"},
+      "sections": [{"blocks": [{"kind": "sine", "bottom": 15, "top": 40, "duration_ms": 3000, "loops": 3}]}],
+      "loop": "once"
+    },
+    {
+      "format": "ache.pattern/v1", "id": "ladder-reward", "function": "Generic",
+      "provenance": {"source": "estate", "title": "Keyword ladder rung: reward (ALIGNMENT #5 shape)"},
+      "sections": [{"blocks": [
+        {"kind": "linear", "bottom": 30, "top": 85, "duration_ms": 4000},
+        {"kind": "square", "top": 85, "duration_ms": 2000},
+        {"kind": "linear", "bottom": 0, "top": 85, "duration_ms": 3000, "falling": true}
+      ]}],
+      "loop": "once"
+    },
+    {
+      "format": "ache.pattern/v1", "id": "forher-vibe-peak", "function": "Vibrate",
+      "provenance": {"source": "estate", "title": "Dual-function climax, vibration half (ALIGNMENT #9 shape)"},
+      "sections": [{"blocks": [
+        {"kind": "linear", "bottom": 10, "top": 60, "duration_ms": 20000},
+        {"kind": "sine", "bottom": 50, "top": 85, "duration_ms": 4000, "speed": 2.0, "loops": 5},
+        {"kind": "square", "top": 95, "duration_ms": 6000},
+        {"kind": "linear", "bottom": 0, "top": 95, "duration_ms": 8000, "falling": true}
+      ]}],
+      "loop": "once"
+    },
+    {
+      "format": "ache.pattern/v1", "id": "forher-air-peak", "function": "AirPulse",
+      "provenance": {"source": "estate", "title": "Dual-function climax, air-pulse half, peaks with the vibration half (ALIGNMENT #9 shape)"},
+      "sections": [{"blocks": [
+        {"kind": "square", "top": 0, "duration_ms": 5000},
+        {"kind": "linear", "bottom": 10, "top": 70, "duration_ms": 15000},
+        {"kind": "sine", "bottom": 55, "top": 90, "duration_ms": 4000, "speed": 2.0, "loops": 5},
+        {"kind": "square", "top": 95, "duration_ms": 6000},
+        {"kind": "linear", "bottom": 0, "top": 95, "duration_ms": 8000, "falling": true}
+      ]}],
+      "loop": "once"
+    }
+  ],
+  "automations": [
+    {
+      "format": "ache.automation/v1", "id": "say-stop",
+      "_comment": "ALIGNMENT #1: the consent-stop primitive. Register the input as {\"id\": \"say_stop\", \"stop\": true} and its event IS ache's synchronous stop (it never reaches this automation). This automation is the in-program echo for sessions that also want the program's own record of it.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "triggers": [{"id": "said", "on": {"external_event": "say_stop"}}],
+      "jobs": [{"id": "halt", "trigger": "said", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+        "actions": ["stop_all", {"notify": "stop word heard: all output stopped"}]}]
+    },
+    {
+      "format": "ache.automation/v1", "id": "hyp-clicker",
+      "_comment": "ALIGNMENT #4: click → response window → reward. Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}, {"id": "click", "kind": "button"}],
+      "variables": [{"id": "clicks", "type": "number", "init": 0, "min": 0, "max": 1000}],
+      "triggers": [{"id": "clicked", "on": {"control_pressed": "click"}}],
+      "jobs": [{"id": "reward", "trigger": "clicked", "repeat": "once", "max_runs": 1, "max_span_ms": 2000,
+        "actions": [{"add_variable": {"var": "clicks", "expr": "1"}}, {"play_pattern": {"pattern": "hyp-click-reward", "target": "main"}}]}]
+    },
+    {
+      "format": "ache.automation/v1", "id": "hyp-keyword-ladder",
+      "_comment": "ALIGNMENT #5: four-rung keyword ladder. Register inputs treat, reward, warning, punishment. Punishment is denial (output withdrawn), never pain. Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "triggers": [
+        {"id": "t", "on": {"external_event": "treat"}},
+        {"id": "r", "on": {"external_event": "reward"}},
+        {"id": "w", "on": {"external_event": "warning"}},
+        {"id": "p", "on": {"external_event": "punishment"}}
+      ],
+      "jobs": [
+        {"id": "treat", "trigger": "t", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"play_pattern": {"pattern": "ladder-treat", "target": "main"}}]},
+        {"id": "reward", "trigger": "r", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"play_pattern": {"pattern": "ladder-reward", "target": "main"}}]},
+        {"id": "warning", "trigger": "w", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"set_function": {"target": "main", "value": "10"}}, {"notify": "warning rung"}]},
+        {"id": "punishment", "trigger": "p", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": ["stop_all", {"notify": "punishment rung: denial"}]}
+      ]
+    },
+    {
+      "format": "ache.automation/v1", "id": "edge-pressure-shape",
+      "_comment": "ALIGNMENT #6 (Civet shape). The pressure sensor is not admitted in v1; a registered `edge_near` event stands in for its threshold crossing. Rises from a floor, drops to zero at the edge, recovers from the floor. Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "variables": [{"id": "level", "type": "number", "init": 20, "min": 0, "max": 90}],
+      "triggers": [{"id": "go", "on": "session_start"}, {"id": "edge", "on": {"external_event": "edge_near"}}],
+      "jobs": [
+        {"id": "ramp", "trigger": "go", "repeat": {"every": {"ms": 1000}}, "max_runs": 600, "max_span_ms": 600000,
+          "actions": [{"add_variable": {"var": "level", "expr": "3"}}, {"set_function": {"target": "main", "value": "level"}}]},
+        {"id": "back_off", "trigger": "edge", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"set_variable": {"var": "level", "expr": "0"}}, {"set_function": {"target": "main", "value": "0"}}, {"notify": "edge: backed off"}]}
+      ]
+    },
+    {
+      "format": "ache.automation/v1", "id": "edge-stillness",
+      "_comment": "ALIGNMENT #7: stillness raises intensity, movement resets to zero. A registered `movement` event stands in for the motion sensor. Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "variables": [{"id": "still", "type": "number", "init": 0, "min": 0, "max": 100}],
+      "triggers": [{"id": "go", "on": "session_start"}, {"id": "moved", "on": {"external_event": "movement"}}],
+      "jobs": [
+        {"id": "reward_stillness", "trigger": "go", "repeat": {"every": {"ms": 1000}}, "max_runs": 600, "max_span_ms": 600000,
+          "actions": [{"add_variable": {"var": "still", "expr": "2"}}, {"set_function": {"target": "main", "value": "still"}}]},
+        {"id": "reset", "trigger": "moved", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"set_variable": {"var": "still", "expr": "0"}}, {"set_function": {"target": "main", "value": "0"}}]}
+      ]
+    },
+    {
+      "format": "ache.automation/v1", "id": "hr-trainer",
+      "_comment": "ALIGNMENT #8: heart-rate edge trainer + HR-intensity law. Register inputs hr_high and hr_ok (threshold crossings, names only). Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "variables": [
+        {"id": "level", "type": "number", "init": 10, "min": 0, "max": 85},
+        {"id": "cooling", "type": "bool", "init": false}
+      ],
+      "triggers": [
+        {"id": "go", "on": "session_start"},
+        {"id": "high", "on": {"external_event": "hr_high"}},
+        {"id": "ok", "on": {"external_event": "hr_ok"}}
+      ],
+      "jobs": [
+        {"id": "law", "trigger": "go", "repeat": {"every": {"ms": 2000}}, "max_runs": 300, "max_span_ms": 600000,
+          "actions": [{"add_variable": {"var": "level", "expr": "select(cooling, 0 - 5, 4)"}}, {"set_function": {"target": "main", "value": "select(cooling, min(level, 15), level)"}}]},
+        {"id": "cool", "trigger": "high", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"set_variable": {"var": "cooling", "expr": "1"}}, {"set_function": {"target": "main", "value": "15"}}]},
+        {"id": "resume", "trigger": "ok", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": [{"set_variable": {"var": "cooling", "expr": "0"}}]}
+      ]
+    },
+    {
+      "format": "ache.automation/v1", "id": "denial-arousal-meter",
+      "_comment": "ALIGNMENT #10: a metered build; at the meter's peak the session denies (all output withdrawn) and the meter falls back. Targets: main.",
+      "controls": [{"id": "stop", "kind": "stop_button"}],
+      "variables": [{"id": "arousal", "type": "number", "init": 0, "min": 0, "max": 100}],
+      "triggers": [
+        {"id": "go", "on": "session_start"},
+        {"id": "peak", "on": {"variable_crossed": {"var": "arousal", "cmp": "ge", "value": 85}}}
+      ],
+      "jobs": [
+        {"id": "build", "trigger": "go", "repeat": {"every": {"ms": 1000}}, "max_runs": 600, "max_span_ms": 600000,
+          "actions": [{"add_variable": {"var": "arousal", "expr": "5"}}, {"set_function": {"target": "main", "value": "arousal * 0.8"}}]},
+        {"id": "deny", "trigger": "peak", "repeat": "once", "max_runs": 1, "max_span_ms": 1000,
+          "actions": ["stop_all", {"set_variable": {"var": "arousal", "expr": "20"}}, {"notify": "denied at the meter's peak"}]}
+      ]
+    }
+  ]
+}

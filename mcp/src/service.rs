@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn tools_carry_the_served_names_and_annotations() {
         let tools = build_tools();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 16);
         let status = &tools[0];
         assert_eq!(status.name, "lovense_status");
         let annotations = status.annotations.as_ref().expect("annotations");
