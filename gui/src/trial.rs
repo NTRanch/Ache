@@ -113,11 +113,11 @@ pub enum Stage {
 impl Stage {
     pub fn label(self) -> &'static str {
         match self {
-            Stage::S0 => "S0 Composed",
-            Stage::S1 => "S1 Warming",
-            Stage::S2 => "S2 Aroused",
-            Stage::S3 => "S3 Peak-ward",
-            Stage::S4 => "S4 Afterglow",
+            Stage::S0 => "Composed",
+            Stage::S1 => "Warming up",
+            Stage::S2 => "Aroused",
+            Stage::S3 => "Near her peak",
+            Stage::S4 => "Afterglow",
         }
     }
 }
@@ -159,7 +159,7 @@ impl SensitivityProfile {
     /// overstimulation rare and mild (high peak, gentle slope).
     pub fn hyper_responsive() -> Self {
         SensitivityProfile {
-            name: "Hyper-responsive".to_string(),
+            name: "Very sensitive".to_string(),
             gain_pm: 1650,
             peak_pm: 2600,
             overstim_slope_pm: 250,
@@ -206,7 +206,7 @@ impl SensitivityProfile {
     /// Needs time and the right zones; intensity is not a shortcut.
     pub fn slow_burn() -> Self {
         SensitivityProfile {
-            name: "Slow-burn".to_string(),
+            name: "Slow burn".to_string(),
             gain_pm: 720,
             peak_pm: 1200,
             overstim_slope_pm: 800,
@@ -224,7 +224,7 @@ impl SensitivityProfile {
     /// Orgasm is possible, via the preferred zone at gentle levels.
     pub fn light_touch() -> Self {
         SensitivityProfile {
-            name: "Light-touch only".to_string(),
+            name: "Light touches only".to_string(),
             gain_pm: 620,
             peak_pm: 620,
             overstim_slope_pm: 1600,

@@ -350,7 +350,7 @@ component TrialToyCard inherits Rectangle {
     Text {
         x: 8px;
         y: 38px;
-        text: "Pleasure (effect on her)";
+        text: "Pleasure — how it feels to her";
         color: Theme.muted;
         font-size: 11px;
     }
@@ -381,7 +381,7 @@ component TrialToyCard inherits Rectangle {
     Text {
         x: 236px;
         y: 38px;
-        text: "Force / pressure";
+        text: "Pressure — how firm it feels";
         color: Theme.muted;
         font-size: 11px;
     }
@@ -445,10 +445,10 @@ component TrialToyCard inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "ache — device catalogue";
+    title: "ache — device research lab";
     width: 1280px;
     height: 820px;
-    background: Theme.background;
+    background: @linear-gradient(180deg, #2a2140, #1e1930 45%);
 
     init => {
         Palette.color-scheme = ColorScheme.dark;
@@ -500,6 +500,7 @@ export component MainWindow inherits Window {
     in property <[TrialToyRow]> trial-toys;
     in property <int> rig-height: 0;
     in-out property <int> rig-scroll: 0;
+    in-out property <bool> show-details: false;
     callback profile-selected(int);
     callback zone-changed(int, float);
     callback trial-remove(int);
@@ -521,7 +522,7 @@ export component MainWindow inherits Window {
             padding: 10px;
             spacing: 10px;
             Text {
-                text: "ache device catalogue";
+                text: "ache · device research lab";
                 color: Theme.accent-bright;
                 font-size: 20px;
                 font-weight: 700;
@@ -545,10 +546,19 @@ export component MainWindow inherits Window {
         HorizontalLayout {
             padding-left: 10px;
             padding-bottom: 6px;
-            Text {
-                text: root.summary;
-                color: Theme.muted;
-                font-size: 12px;
+            VerticalLayout {
+                spacing: 1px;
+                Text {
+                    text: root.summary;
+                    color: Theme.muted;
+                    font-size: 12px;
+                }
+                Text {
+                    text: "New here? Pick any toy, then choose Ask Lana — she explains it in plain words and sets up a play session. The letter chips say how well the maker data matched (A is best); EN means an English product page, NON-EN another language, DEAD a link that has gone, UNVERIFIED not yet checked.";
+                    color: Theme.faint;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
             }
         }
 
@@ -565,7 +575,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "device control is not wired in this build; every control is inert. Lana's trial is a simulation — virtual toys only.";
+                    text: "device control is not connected in this build, so nothing here can move a real device. Lana's session is a simulation — virtual toys only.";
                     color: white;
                     font-weight: 700;
                     vertical-alignment: center;
@@ -681,9 +691,19 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Rectangle {
                             width: 288px;
-                            height: 288px;
+                            height: 360px;
                             clip: true;
                             background: Theme.surface;
+                            // Her glow — the room answers her arousal.
+                            Rectangle {
+                                x: 24px;
+                                y: 20px;
+                                width: 240px;
+                                height: 320px;
+                                border-radius: 120px;
+                                background: @radial-gradient(circle, #ec489955, #ec489900);
+                                opacity: 0.25 + root.lana-arousal * 0.0075;
+                            }
                             Image {
                                 source: root.lana-strip-idx == 0 ? Assets.lana-idle
                                     : root.lana-strip-idx == 1 ? Assets.lana-guiding
@@ -694,25 +714,63 @@ export component MainWindow inherits Window {
                                 source-clip-y: 0;
                                 source-clip-width: 144;
                                 source-clip-height: 288;
-                                width: 144px;
-                                height: 288px;
-                                x: 72px + root.lana-x;
+                                width: 180px;
+                                height: 360px;
+                                x: 54px + root.lana-x;
                                 y: root.lana-y;
+                            }
+                            // The zones being played, glowing on her body.
+                            Rectangle {
+                                x: 96px;
+                                y: 98px;
+                                width: 96px;
+                                height: 44px;
+                                border-radius: 22px;
+                                background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
+                                opacity: root.zone-nip * 0.008;
+                            }
+                            Rectangle {
+                                x: 116px;
+                                y: 155px;
+                                width: 56px;
+                                height: 30px;
+                                border-radius: 15px;
+                                background: @radial-gradient(circle, #f9a8d4cc, #ec489900);
+                                opacity: root.zone-ext * 0.008;
+                            }
+                            Rectangle {
+                                x: 124px;
+                                y: 174px;
+                                width: 52px;
+                                height: 28px;
+                                border-radius: 14px;
+                                background: @radial-gradient(circle, #f472b6aa, #ec489900);
+                                opacity: root.zone-int * 0.008;
+                            }
+                            Rectangle {
+                                x: 148px;
+                                y: 166px;
+                                width: 44px;
+                                height: 28px;
+                                border-radius: 14px;
+                                background: @radial-gradient(circle, #f472b6aa, #ec489900);
+                                opacity: root.zone-anal * 0.008;
                             }
                         }
                         Text {
-                            text: "Lana — your guide. Art: full-body figure, estate-generated (candidate-class). Motion: procedural placeholder via the reaction parameter surface — reaction clips land through the clip registry.";
+                            text: "Lana — your guide and play partner. Full-body figure, estate-generated (candidate-class).";
                             color: Theme.faint;
                             font-size: 10px;
                             wrap: word-wrap;
                         }
                         Text {
-                            text: root.lana-band + " · " + root.lana-stage;
+                            text: root.lana-band + (root.lana-stage == root.lana-band ? "" : " · " + root.lana-stage);
                             color: Theme.pink-bright;
                             font-weight: 700;
+                            font-size: 15px;
                         }
                         Meter {
-                            label: "Arousal";
+                            label: "Her arousal";
                             value: root.lana-arousal;
                             bar-color: Theme.pink;
                         }
@@ -720,19 +778,33 @@ export component MainWindow inherits Window {
                             text: root.lana-events;
                             color: Theme.muted;
                             font-size: 12px;
+                            wrap: word-wrap;
                         }
                         Text {
                             text: "“" + root.lana-reaction + "”";
                             color: Theme.foreground;
                             wrap: word-wrap;
                         }
-                        Text {
+                        Rectangle {
+                            height: 16px;
+                            TouchArea {
+                                clicked => {
+                                    root.show-details = !root.show-details;
+                                }
+                            }
+                            Text {
+                                text: (root.show-details ? "▾ " : "▸ ") + "Reading her closely — the details";
+                                color: Theme.faint;
+                                font-size: 11px;
+                            }
+                        }
+                        if root.show-details: Text {
                             text: root.lana-params;
                             color: Theme.faint;
                             font-size: 10px;
                             wrap: word-wrap;
                         }
-                        Text {
+                        if root.show-details: Text {
                             text: root.lana-clip;
                             color: Theme.faint;
                             font-size: 10px;
@@ -756,7 +828,7 @@ export component MainWindow inherits Window {
                             font-size: 14px;
                         }
                         Text {
-                            text: root.has-detail ? root.detail-title : "Select a device in the Catalogue and she'll walk you through it.";
+                            text: root.has-detail ? root.detail-title : "Start here: pick a toy in the Catalogue, add it to her rig, then raise its level gently and watch her.";
                             color: Theme.foreground;
                             font-weight: 700;
                             wrap: word-wrap;
@@ -794,15 +866,21 @@ export component MainWindow inherits Window {
                             background: Theme.border;
                         }
                         Text {
-                            text: "Sensitivity & zones — modelling real variation";
+                            text: "How she likes it — sensitivity & zones";
                             color: Theme.accent-bright;
                             font-weight: 700;
                             font-size: 14px;
                         }
+                        Text {
+                            text: "Her comfort, her pace — every body is different. These are her preferences; the sliders fine-tune them, zone by zone.";
+                            color: Theme.muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
                         HorizontalLayout {
                             spacing: 4px;
                             Button {
-                                text: "Hyper";
+                                text: "Keen";
                                 clicked => { root.profile-selected(0); }
                             }
                             Button {
@@ -810,20 +888,20 @@ export component MainWindow inherits Window {
                                 clicked => { root.profile-selected(1); }
                             }
                             Button {
-                                text: "Lana";
+                                text: "Lana's own";
                                 clicked => { root.profile-selected(2); }
                             }
                             Button {
-                                text: "Slow-burn";
+                                text: "Slow burn";
                                 clicked => { root.profile-selected(3); }
                             }
                             Button {
-                                text: "Light-touch";
+                                text: "Gentle";
                                 clicked => { root.profile-selected(4); }
                             }
                         }
                         Text {
-                            text: "Profile: " + root.profile-name;
+                            text: "Her settings: " + root.profile-name;
                             color: Theme.foreground;
                             font-size: 12px;
                             font-weight: 700;
@@ -872,7 +950,7 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             Text {
-                                text: "Trial rig — simulation, virtual toys only";
+                                text: "Play rig — a simulation with virtual toys";
                                 color: Theme.accent-bright;
                                 font-weight: 700;
                                 font-size: 14px;
@@ -900,30 +978,36 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             wrap: word-wrap;
                         }
+                        Text {
+                            text: "Watch her — the glow on her body shows where each toy is playing. These bars are just the details.";
+                            color: Theme.muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
                         HorizontalLayout {
                             spacing: 10px;
                             Meter {
-                                label: "Zone: external";
+                                label: "Outside";
                                 value: root.zone-ext;
                                 width: 118px;
                             }
                             Meter {
-                                label: "Zone: internal";
+                                label: "Inside";
                                 value: root.zone-int;
                                 width: 118px;
                             }
                             Meter {
-                                label: "Zone: anal";
+                                label: "Anal";
                                 value: root.zone-anal;
                                 width: 118px;
                             }
                             Meter {
-                                label: "Zone: nipples";
+                                label: "Nipples";
                                 value: root.zone-nip;
                                 width: 118px;
                             }
                             Meter {
-                                label: "Total pleasure";
+                                label: "All of her";
                                 value: root.total-pleasure;
                                 bar-color: Theme.pink;
                                 width: 118px;
@@ -936,7 +1020,7 @@ export component MainWindow inherits Window {
                             image-fit: fill;
                         }
                         Text {
-                            text: "Live trace — last 30 s: one pleasure line per toy (pink shades), force in violet, arousal in white.";
+                            text: "The last 30 seconds, drawn live — a pink line per toy for how it feels to her, violet for pressure, white for her arousal.";
                             color: Theme.faint;
                             font-size: 10px;
                         }
@@ -1068,7 +1152,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.lexicon-can-try: Button {
-                            text: "Try it on Lana — preload this in the trial rig";
+                            text: "Try it with Lana — set this session up in her play rig";
                             clicked => {
                                 root.lexicon-try();
                                 root.active-tab = 1;
@@ -1092,7 +1176,7 @@ export component MainWindow inherits Window {
                         spacing: 10px;
                         alignment: start;
                         Text {
-                            text: "Master";
+                            text: "Master switch";
                             color: Theme.foreground;
                             vertical-alignment: center;
                         }
@@ -1169,7 +1253,7 @@ export component AboutDialog inherits Window {
             font-weight: 700;
         }
         Text {
-            text: "Unified haptics MCP — device catalogue browser, Lana guide & trial, and lexicon.";
+            text: "Unified haptics MCP — device catalogue browser, Lana guide & trial, and lexicon. In plain terms: a friendly catalogue of toys with Lana as your guide, and a play-along simulation of how they feel to her.";
             color: Theme.muted;
             wrap: word-wrap;
         }

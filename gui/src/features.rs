@@ -55,11 +55,13 @@ impl MatchKind {
     /// Short label for the UI's provenance line.
     pub fn label(self) -> &'static str {
         match self {
-            MatchKind::Exact => "config match: exact",
-            MatchKind::Generation => "config match: generation-normalised",
-            MatchKind::NameOnly => "config match: name only",
-            MatchKind::ProtocolDefault => "config match: protocol defaults",
-            MatchKind::None => "no config entry matched",
+            MatchKind::Exact => "matched exactly to the maker's published device data",
+            MatchKind::Generation => {
+                "matched to the maker's device data for this model's generation"
+            }
+            MatchKind::NameOnly => "matched by name only — treat the details as approximate",
+            MatchKind::ProtocolDefault => "filled in from the maker's standard protocol defaults",
+            MatchKind::None => "no maker data found — nothing here is invented",
         }
     }
 }

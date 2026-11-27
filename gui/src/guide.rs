@@ -229,11 +229,11 @@ pub fn explain(device: &Device, features: &DeviceFeatures) -> GuideText {
         }
         if !features.inputs.is_empty() {
             features_block.push_str(&format!(
-                "Sensors the config exposes: {}.",
+                "Sensors it reports back: {}.",
                 features.inputs.join(", ")
             ));
         } else {
-            features_block.push_str("The config exposes no readable sensors for it.");
+            features_block.push_str("It reports no sensors back.");
         }
     }
 
@@ -247,9 +247,9 @@ pub fn explain(device: &Device, features: &DeviceFeatures) -> GuideText {
         features_block: features_block.trim_end().to_string(),
         kink_block: kink_block.trim_end().to_string(),
         basis: format!(
-            "Basis: buttplug device config, {}. Form factor: {} (IoST type: {}). Kink mapping: estate canon (Kama LANA-TOYS / MoonDeep tracks).",
+            "How we know its features: {}. Shape: {} (the maker's type: {}). Play styles: estate canon (Kama LANA-TOYS / MoonDeep tracks).",
             features.match_kind.label(),
-            family,
+            family_label(family),
             device.device_type
         ),
     }

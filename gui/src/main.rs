@@ -235,14 +235,14 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
     window.set_lana_reaction(state.trial.reaction_line().into());
     window.set_lana_events(
         format!(
-            "Orgasms: {} · Squirts: {} · Profile: {}",
+            "Times she's come: {} · squirted: {} · her settings: {}",
             state.trial.orgasms, state.trial.squirts, state.trial.profile.name
         )
         .into(),
     );
     window.set_lana_params(
         format!(
-            "Reaction surface — pupil shape {}‰ · blush {}‰ · mouth open {}‰ · breath {} /min · tremble {}‰ · arch {}‰ · recoil {}‰ · settle {}‰",
+            "Her expression, in detail — pupil shape {}‰ · blush {}‰ · mouth open {}‰ · breathing {} a minute · tremble {}‰ · arch {}‰ · recoil {}‰ · settle {}‰",
             frame.expr.pupil_shape,
             frame.expr.blush_intensity,
             frame.expr.mouth_open,
@@ -255,9 +255,9 @@ fn sync_lana(window: &MainWindow, state: &AppState) {
         .into(),
     );
     let clip_status = match state.clips.lookup(&frame) {
-        Some(key) => format!("Playing reaction clip: {key}"),
+        Some(key) => format!("Playing her recorded reaction clip: {key}"),
         None => format!(
-            "Procedural placeholder reaction — clip {} not registered yet (animation lane).",
+            "Her reactions are improvised live for now — recorded clips ({}) arrive with the animation update.",
             frame.clip_key
         ),
     };
